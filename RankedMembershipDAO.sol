@@ -29,16 +29,36 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     using Checkpoints for Checkpoints.Trace224;
 
     // ----------------------------
-    // Constants / Parameters
+    // Constants (immutable limits for safeguards)
     // ----------------------------
 
     uint64 public constant INVITE_EPOCH = 100 days;
-    uint64 public constant INVITE_EXPIRY = 24 hours;
 
-    uint64 public constant ORDER_DELAY = 24 hours;
+    // Bounds for configurable parameters (safety limits)
+    uint64 public constant MIN_INVITE_EXPIRY = 1 hours;
+    uint64 public constant MAX_INVITE_EXPIRY = 7 days;
 
-    uint64 public constant VOTING_PERIOD = 7 days;
-    uint16 public constant QUORUM_BPS = 2000; // 20% of total snapshot voting power
+    uint64 public constant MIN_ORDER_DELAY = 1 hours;
+    uint64 public constant MAX_ORDER_DELAY = 7 days;
+
+    uint64 public constant MIN_VOTING_PERIOD = 1 days;
+    uint64 public constant MAX_VOTING_PERIOD = 30 days;
+
+    uint16 public constant MIN_QUORUM_BPS = 500;   // 5% minimum quorum
+    uint16 public constant MAX_QUORUM_BPS = 5000;  // 50% maximum quorum
+
+    uint64 public constant MIN_EXECUTION_DELAY = 1 hours;
+    uint64 public constant MAX_EXECUTION_DELAY = 7 days;
+
+    // ----------------------------
+    // Configurable Governance Parameters (can be changed via governance)
+    // ----------------------------
+
+    uint64 public inviteExpiry = 24 hours;
+    uint64 public orderDelay = 24 hours;
+    uint64 public votingPeriod = 7 days;
+    uint16 public quorumBps = 2000; // 20% of total snapshot voting power
+    uint64 public executionDelay = 24 hours; // timelock for treasury proposals
 
     // ----------------------------
     // Ranks
@@ -111,6 +131,8 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     error OrderBlocked();
     error OrderWrongType();
     error BootstrapAlreadyFinalized();
+    error InvalidParameterValue();
+    error ParameterOutOfBounds();
 
     // ----------------------------
     // Membership
@@ -205,7 +227,12 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     enum ProposalType {
         GrantRank,
         DemoteRank,
-        ChangeAuthority
+        ChangeAuthority,
+        ChangeVotingPeriod,
+        ChangeQuorumBps,
+        ChangeOrderDelay,
+        ChangeInviteExpiry,
+        ChangeExecutionDelay
     }
 
     struct Proposal {
@@ -219,6 +246,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         // payload (one of these used depending on proposalType)
         Rank rankValue;
         address newAuthority;
+        uint64 newParameterValue;  // for governance parameter change proposals
 
         uint32 snapshotBlock;
         uint64 startTime;
@@ -260,8 +288,15 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     event OrderExecuted(uint64 indexed orderId);
 
     event ProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint32 indexed targetId, Rank rankValue, address newAuthority, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
+    event ParameterProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint64 newValue, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
     event VoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight);
     event ProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes);
+
+    event VotingPeriodChanged(uint64 oldValue, uint64 newValue, uint64 proposalId);
+    event QuorumBpsChanged(uint16 oldValue, uint16 newValue, uint64 proposalId);
+    event OrderDelayChanged(uint64 oldValue, uint64 newValue, uint64 proposalId);
+    event InviteExpiryChanged(uint64 oldValue, uint64 newValue, uint64 proposalId);
+    event ExecutionDelayChanged(uint64 oldValue, uint64 newValue, uint64 proposalId);
 
     // ----------------------------
     // Constructor (seed initial SSS member)
@@ -434,7 +469,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
 
         inviteId = nextInviteId++;
         uint64 issuedAt = uint64(block.timestamp);
-        uint64 expiresAt = issuedAt + INVITE_EXPIRY;
+        uint64 expiresAt = issuedAt + inviteExpiry;
 
         invitesById[inviteId] = Invite({
             exists: true,
@@ -553,13 +588,13 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             newRank: newRank,
             newAuthority: address(0),
             createdAt: uint64(block.timestamp),
-            executeAfter: uint64(block.timestamp + ORDER_DELAY),
+            executeAfter: uint64(block.timestamp + orderDelay),
             blocked: false,
             executed: false,
             blockedById: 0
         });
 
-        emit OrderCreated(orderId, OrderType.PromoteGrant, issuerId, targetId, newRank, address(0), uint64(block.timestamp + ORDER_DELAY));
+        emit OrderCreated(orderId, OrderType.PromoteGrant, issuerId, targetId, newRank, address(0), uint64(block.timestamp + orderDelay));
     }
 
     function issueDemotionOrder(uint32 targetId) external whenNotPaused nonReentrant returns (uint64 orderId) {
@@ -588,13 +623,13 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             newRank: Rank.G, // unused for demote (computed at execute)
             newAuthority: address(0),
             createdAt: uint64(block.timestamp),
-            executeAfter: uint64(block.timestamp + ORDER_DELAY),
+            executeAfter: uint64(block.timestamp + orderDelay),
             blocked: false,
             executed: false,
             blockedById: 0
         });
 
-        emit OrderCreated(orderId, OrderType.DemoteOrder, issuerId, targetId, Rank.G, address(0), uint64(block.timestamp + ORDER_DELAY));
+        emit OrderCreated(orderId, OrderType.DemoteOrder, issuerId, targetId, Rank.G, address(0), uint64(block.timestamp + orderDelay));
     }
 
     function issueAuthorityOrder(uint32 targetId, address newAuthority) external whenNotPaused nonReentrant returns (uint64 orderId) {
@@ -625,13 +660,13 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             newRank: Rank.G, // unused
             newAuthority: newAuthority,
             createdAt: uint64(block.timestamp),
-            executeAfter: uint64(block.timestamp + ORDER_DELAY),
+            executeAfter: uint64(block.timestamp + orderDelay),
             blocked: false,
             executed: false,
             blockedById: 0
         });
 
-        emit OrderCreated(orderId, OrderType.AuthorityOrder, issuerId, targetId, Rank.G, newAuthority, uint64(block.timestamp + ORDER_DELAY));
+        emit OrderCreated(orderId, OrderType.AuthorityOrder, issuerId, targetId, Rank.G, newAuthority, uint64(block.timestamp + orderDelay));
     }
 
     function blockOrder(uint64 orderId) external whenNotPaused nonReentrant {
@@ -791,6 +826,105 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         );
     }
 
+    // ----------------------------
+    // Governance: Parameter Change Proposals
+    // ----------------------------
+
+    function createProposalChangeVotingPeriod(uint64 newValue) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        if (newValue < MIN_VOTING_PERIOD || newValue > MAX_VOTING_PERIOD) revert ParameterOutOfBounds();
+        
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalFull(
+            ProposalType.ChangeVotingPeriod,
+            proposerId,
+            0, // no target
+            Rank.G, // unused
+            address(0), // unused
+            newValue
+        );
+
+        emit ParameterProposalCreated(proposalId, ProposalType.ChangeVotingPeriod, proposerId, newValue, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
+    function createProposalChangeQuorumBps(uint16 newValue) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        if (newValue < MIN_QUORUM_BPS || newValue > MAX_QUORUM_BPS) revert ParameterOutOfBounds();
+        
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalFull(
+            ProposalType.ChangeQuorumBps,
+            proposerId,
+            0, // no target
+            Rank.G, // unused
+            address(0), // unused
+            uint64(newValue)
+        );
+
+        emit ParameterProposalCreated(proposalId, ProposalType.ChangeQuorumBps, proposerId, uint64(newValue), uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
+    function createProposalChangeOrderDelay(uint64 newValue) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        if (newValue < MIN_ORDER_DELAY || newValue > MAX_ORDER_DELAY) revert ParameterOutOfBounds();
+        
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalFull(
+            ProposalType.ChangeOrderDelay,
+            proposerId,
+            0, // no target
+            Rank.G, // unused
+            address(0), // unused
+            newValue
+        );
+
+        emit ParameterProposalCreated(proposalId, ProposalType.ChangeOrderDelay, proposerId, newValue, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
+    function createProposalChangeInviteExpiry(uint64 newValue) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        if (newValue < MIN_INVITE_EXPIRY || newValue > MAX_INVITE_EXPIRY) revert ParameterOutOfBounds();
+        
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalFull(
+            ProposalType.ChangeInviteExpiry,
+            proposerId,
+            0, // no target
+            Rank.G, // unused
+            address(0), // unused
+            newValue
+        );
+
+        emit ParameterProposalCreated(proposalId, ProposalType.ChangeInviteExpiry, proposerId, newValue, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
+    function createProposalChangeExecutionDelay(uint64 newValue) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        if (newValue < MIN_EXECUTION_DELAY || newValue > MAX_EXECUTION_DELAY) revert ParameterOutOfBounds();
+        
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalFull(
+            ProposalType.ChangeExecutionDelay,
+            proposerId,
+            0, // no target
+            Rank.G, // unused
+            address(0), // unused
+            newValue
+        );
+
+        emit ParameterProposalCreated(proposalId, ProposalType.ChangeExecutionDelay, proposerId, newValue, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
     function _enforceProposalLimit(uint32 proposerId) internal view {
         uint8 limit = proposalLimitOfRank(membersById[proposerId].rank);
         if (limit == 0) revert RankTooLow();
@@ -804,10 +938,21 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         Rank rankValue,
         address newAuthority
     ) internal returns (uint64 proposalId) {
+        return _createProposalFull(pType, proposerId, targetId, rankValue, newAuthority, 0);
+    }
+
+    function _createProposalFull(
+        ProposalType pType,
+        uint32 proposerId,
+        uint32 targetId,
+        Rank rankValue,
+        address newAuthority,
+        uint64 newParameterValue
+    ) internal returns (uint64 proposalId) {
         proposalId = nextProposalId++;
 
         uint64 start = uint64(block.timestamp);
-        uint64 end = start + VOTING_PERIOD;
+        uint64 end = start + votingPeriod;
 
         // Snapshot at current block
         uint32 snap = block.number.toUint32();
@@ -820,6 +965,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             targetId: targetId,
             rankValue: rankValue,
             newAuthority: newAuthority,
+            newParameterValue: newParameterValue,
             snapshotBlock: snap,
             startTime: start,
             endTime: end,
@@ -878,7 +1024,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         uint224 votesCast = p.yesVotes + p.noVotes;
 
         // quorum check
-        uint256 required = (uint256(totalAtSnap) * QUORUM_BPS) / 10_000;
+        uint256 required = (uint256(totalAtSnap) * quorumBps) / 10_000;
         if (votesCast < required) {
             p.succeeded = false;
             emit ProposalFinalized(proposalId, false, p.yesVotes, p.noVotes);

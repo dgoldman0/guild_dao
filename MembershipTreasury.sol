@@ -33,6 +33,11 @@ interface IRankedMembershipDAO {
     function proposalLimitOfRank(Rank r) external pure returns (uint8);
 
     function votingPowerOfRank(Rank r) external pure returns (uint224);
+
+    // Governance parameters (configurable via DAO governance)
+    function votingPeriod() external view returns (uint64);
+    function quorumBps() external view returns (uint16);
+    function executionDelay() external view returns (uint64);
 }
 
 contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
@@ -40,12 +45,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ----------------------------
-    // Params
+    // Params (now read from DAO governance)
     // ----------------------------
-
-    uint64 public constant VOTING_PERIOD = 7 days;
-    uint16 public constant QUORUM_BPS = 2000; // 20%
-    uint64 public constant EXECUTION_DELAY = 24 hours; // timelock after passing
     
     /// @notice Maximum spending limit per period to prevent excessive grants (M-04)
     uint256 public constant MAX_SPENDING_LIMIT = 10_000 ether;
@@ -923,7 +924,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         p.proposerRank = rank;
         p.snapshotBlock = block.number.toUint32();
         p.startTime = uint64(block.timestamp);
-        p.endTime = p.startTime + VOTING_PERIOD;
+        p.endTime = p.startTime + dao.votingPeriod();
 
         p.action = Action({
             actionType: ActionType.TransferETH,
@@ -964,7 +965,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         p.proposerRank = rank;
         p.snapshotBlock = block.number.toUint32();
         p.startTime = uint64(block.timestamp);
-        p.endTime = p.startTime + VOTING_PERIOD;
+        p.endTime = p.startTime + dao.votingPeriod();
 
         p.action = Action({
             actionType: ActionType.TransferERC20,
@@ -1005,7 +1006,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         p.proposerRank = rank;
         p.snapshotBlock = block.number.toUint32();
         p.startTime = uint64(block.timestamp);
-        p.endTime = p.startTime + VOTING_PERIOD;
+        p.endTime = p.startTime + dao.votingPeriod();
 
         p.action = Action({
             actionType: ActionType.Call,
@@ -1310,7 +1311,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
         emit TreasuryProposalCreated(
             proposalId, proposerId, ActionType.TransferNFT, to, nftContract, tokenId,
-            uint64(block.timestamp), uint64(block.timestamp) + VOTING_PERIOD, block.number.toUint32()
+            uint64(block.timestamp), uint64(block.timestamp) + dao.votingPeriod(), block.number.toUint32()
         );
     }
 
@@ -1570,7 +1571,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         p.proposerRank = rank;
         p.snapshotBlock = block.number.toUint32();
         p.startTime = uint64(block.timestamp);
-        p.endTime = p.startTime + VOTING_PERIOD;
+        p.endTime = p.startTime + dao.votingPeriod();
 
         p.action = Action({
             actionType: actionType,
@@ -1632,7 +1633,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         uint224 totalAtSnap = dao.totalVotingPowerAt(p.snapshotBlock);
         uint224 votesCast = p.yesVotes + p.noVotes;
 
-        uint256 required = (uint256(totalAtSnap) * QUORUM_BPS) / 10_000;
+        uint256 required = (uint256(totalAtSnap) * dao.quorumBps()) / 10_000;
         if (votesCast < required) {
             p.succeeded = false;
             emit TreasuryProposalFinalized(proposalId, false, p.yesVotes, p.noVotes, 0);
@@ -1646,7 +1647,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         }
 
         p.succeeded = true;
-        p.executableAfter = uint64(block.timestamp + EXECUTION_DELAY);
+        p.executableAfter = uint64(block.timestamp + dao.executionDelay());
 
         emit TreasuryProposalFinalized(proposalId, true, p.yesVotes, p.noVotes, p.executableAfter);
     }
@@ -2042,6 +2043,25 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     function hasNFTAccess(address spender, address nftContract) external view returns (bool, TreasurerType) {
         (TreasurerType tType,, bool canTransfer) = _checkNFTAccess(spender, nftContract);
         return (canTransfer, tType);
+    }
+
+    // ----------------------------
+    // Governance Parameter Views (forwarded from DAO)
+    // ----------------------------
+
+    /// @notice Get current voting period (from DAO governance)
+    function getVotingPeriod() external view returns (uint64) {
+        return dao.votingPeriod();
+    }
+
+    /// @notice Get current quorum in basis points (from DAO governance)
+    function getQuorumBps() external view returns (uint16) {
+        return dao.quorumBps();
+    }
+
+    /// @notice Get current execution delay (from DAO governance)
+    function getExecutionDelay() external view returns (uint64) {
+        return dao.executionDelay();
     }
 
     // ----------------------------
