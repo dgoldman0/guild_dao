@@ -6,6 +6,7 @@ import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
 
@@ -36,6 +37,7 @@ interface IRankedMembershipDAO {
 
 contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     using SafeCast for uint256;
+    using SafeERC20 for IERC20;
 
     // ----------------------------
     // Params
@@ -44,6 +46,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     uint64 public constant VOTING_PERIOD = 7 days;
     uint16 public constant QUORUM_BPS = 2000; // 20%
     uint64 public constant EXECUTION_DELAY = 24 hours; // timelock after passing
+    
+    /// @notice Maximum spending limit per period to prevent excessive grants (M-04)
+    uint256 public constant MAX_SPENDING_LIMIT = 10_000 ether;
 
     IRankedMembershipDAO public immutable dao;
 
@@ -309,6 +314,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     error TreasurerCallsDisabled();
     error CallTargetAlreadyApproved();
     error CallTargetNotInWhitelist();
+    error ZeroAmount();
+    error NFTNotOwned();
+    error SpendingLimitTooHigh();
 
     // ----------------------------
     // Events
@@ -448,7 +456,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     function depositERC20(address token, uint256 amount) external whenNotPaused nonReentrant {
         if (token == address(0)) revert InvalidAddress();
-        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        if (amount == 0) revert ZeroAmount();
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         emit DepositedERC20(token, msg.sender, amount);
     }
 
@@ -495,6 +504,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Treasurer spends ETH directly (no proposal needed)
     function treasurerSpendETH(address to, uint256 amount) external whenNotPaused nonReentrant {
         if (to == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
 
         (TreasurerType tType, uint256 limit, uint32 memberId) = _getTreasurerInfo(msg.sender, address(0));
         if (tType == TreasurerType.None) revert NotTreasurer();
@@ -510,13 +520,14 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Treasurer spends ERC20 directly (no proposal needed)
     function treasurerSpendERC20(address token, address to, uint256 amount) external whenNotPaused nonReentrant {
         if (token == address(0) || to == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
 
         (TreasurerType tType, uint256 limit, uint32 memberId) = _getTreasurerInfo(msg.sender, token);
         if (tType == TreasurerType.None) revert NotTreasurer();
 
         _checkAndRecordTreasurerSpending(msg.sender, tType, memberId, token, amount, limit);
 
-        IERC20(token).transfer(to, amount);
+        IERC20(token).safeTransfer(to, amount);
 
         emit TreasurerSpent(msg.sender, tType, to, token, amount);
     }
@@ -572,7 +583,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
             if (config.hasAccess) {
                 // Verify member still exists and has required rank
                 (bool exists,, IRankedMembershipDAO.Rank rank,,) = dao.membersById(memberId);
-                if (exists && rank >= config.minRank) {
+                // Use explicit rank index comparison for clarity (M-03)
+                if (exists && _rankIndex(rank) >= _rankIndex(config.minRank)) {
                     return (TreasurerType.MemberBased, memberId, true);
                 }
             }
@@ -650,7 +662,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
             // Verify member still exists and has required rank
             (bool exists,, IRankedMembershipDAO.Rank rank,,) = dao.membersById(memberId);
             if (!exists) return (TreasurerType.None, 0, 0);
-            if (rank < config.minRank) return (TreasurerType.None, 0, 0);
+            // Use explicit rank index comparison for clarity (M-03)
+            if (_rankIndex(rank) < _rankIndex(config.minRank)) return (TreasurerType.None, 0, 0);
 
             // Calculate limit based on rank
             uint224 rankPower = dao.votingPowerOfRank(rank);
@@ -859,6 +872,12 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // Membership helpers
     // ----------------------------
 
+    /// @notice Convert rank enum to numeric index for explicit comparisons (M-03)
+    /// @dev Ranks are ordered G(0), F(1), E(2), D(3), C(4), B(5), A(6), S(7), SS(8), SSS(9)
+    function _rankIndex(IRankedMembershipDAO.Rank r) internal pure returns (uint8) {
+        return uint8(r);
+    }
+
     function _requireMember(address who) internal view returns (uint32 memberId, IRankedMembershipDAO.Rank rank) {
         memberId = dao.memberIdByAuthority(who);
         if (memberId == 0) revert NotMember();
@@ -888,6 +907,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         returns (uint64 proposalId)
     {
         if (to == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
 
         (uint32 proposerId, IRankedMembershipDAO.Rank rank) = _requireMember(msg.sender);
         // require at least F (same as DAO’s proposal gate)
@@ -929,6 +949,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         returns (uint64 proposalId)
     {
         if (token == address(0) || to == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
 
         (uint32 proposerId, IRankedMembershipDAO.Rank rank) = _requireMember(msg.sender);
         if (rank < IRankedMembershipDAO.Rank.F) revert NotMember();
@@ -1650,8 +1671,10 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
             (bool ok,) = p.action.target.call{value: p.action.value}("");
             if (!ok) revert ExecutionFailed();
         } else if (p.action.actionType == ActionType.TransferERC20) {
-            IERC20(p.action.token).transfer(p.action.target, p.action.value);
+            IERC20(p.action.token).safeTransfer(p.action.target, p.action.value);
         } else if (p.action.actionType == ActionType.Call) {
+            // Note: callActionsEnabled can change between proposal creation and execution.
+            // This is intentional - governance can disable dangerous features for pending proposals.
             if (!callActionsEnabled) revert ActionDisabled();
             (bool ok,) = p.action.target.call{value: p.action.value}(p.action.data);
             if (!ok) revert ExecutionFailed();
@@ -1707,6 +1730,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         (bool exists,,,,) = dao.membersById(params.memberId);
         if (!exists) revert NotMember();
         if (memberTreasurers[params.memberId].active) revert TreasurerAlreadyExists();
+        
+        // Validate spending limits are within bounds (M-04)
+        if (params.baseSpendingLimit > MAX_SPENDING_LIMIT) revert SpendingLimitTooHigh();
 
         memberTreasurers[params.memberId] = TreasurerConfig({
             active: true,
@@ -1730,6 +1756,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         MemberTreasurerParams memory params = abi.decode(data, (MemberTreasurerParams));
         
         if (!memberTreasurers[params.memberId].active) revert TreasurerNotActive();
+        
+        // Validate spending limits are within bounds (M-04)
+        if (params.baseSpendingLimit > MAX_SPENDING_LIMIT) revert SpendingLimitTooHigh();
 
         TreasurerConfig storage config = memberTreasurers[params.memberId];
         config.baseSpendingLimit = params.baseSpendingLimit;
@@ -1775,6 +1804,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         AddressTreasurerParams memory params = abi.decode(data, (AddressTreasurerParams));
         
         if (addressTreasurers[params.treasurer].active) revert TreasurerAlreadyExists();
+        
+        // Validate spending limits are within bounds (M-04)
+        if (params.baseSpendingLimit > MAX_SPENDING_LIMIT) revert SpendingLimitTooHigh();
 
         addressTreasurers[params.treasurer] = TreasurerConfig({
             active: true,
@@ -1792,6 +1824,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         AddressTreasurerParams memory params = abi.decode(data, (AddressTreasurerParams));
         
         if (!addressTreasurers[params.treasurer].active) revert TreasurerNotActive();
+        
+        // Validate spending limits are within bounds (M-04)
+        if (params.baseSpendingLimit > MAX_SPENDING_LIMIT) revert SpendingLimitTooHigh();
 
         TreasurerConfig storage config = addressTreasurers[params.treasurer];
         config.baseSpendingLimit = params.baseSpendingLimit;
@@ -1831,6 +1866,13 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     function _executeTransferNFT(bytes memory data) internal {
         NFTTransferParams memory params = abi.decode(data, (NFTTransferParams));
+        
+        // Verify treasury owns this NFT before attempting transfer (M-07)
+        try IERC721(params.nftContract).ownerOf(params.tokenId) returns (address owner) {
+            if (owner != address(this)) revert NFTNotOwned();
+        } catch {
+            revert NFTNotOwned();
+        }
         
         IERC721(params.nftContract).safeTransferFrom(address(this), params.to, params.tokenId);
         

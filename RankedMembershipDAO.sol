@@ -110,6 +110,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     error OrderNotReady();
     error OrderBlocked();
     error OrderWrongType();
+    error BootstrapAlreadyFinalized();
 
     // ----------------------------
     // Membership
@@ -363,7 +364,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function _bootstrapMember(address authority, Rank rank) internal {
-        if (bootstrapFinalized) revert();
+        if (bootstrapFinalized) revert BootstrapAlreadyFinalized();
         _requireValidAddress(authority);
         if (memberIdByAuthority[authority] != 0) revert AlreadyMember();
 
