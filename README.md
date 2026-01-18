@@ -1,57 +1,119 @@
-# Guild DAO System
+# 🏛️ Guild DAO System
 
-A comprehensive membership-controlled DAO with ranked governance and treasury management.
+> **A sophisticated, hierarchical DAO framework combining ranked membership governance with powerful treasury management.**
 
-## System Overview
+A comprehensive membership-controlled DAO with ranked governance and treasury management. Guild DAO enables communities to organize through a tiered membership system with proportional voting power, secure onboarding via invites, and a flexible treasury controlled by democratic voting and designated treasurers.
 
-The Guild DAO consists of two main contracts:
+## 🎯 Key Features
 
-1. **RankedMembershipDAO** - Membership management, ranks, invites, orders, and governance
-2. **MembershipTreasury** - Treasury management with proposal-based spending, treasurer roles, and NFT support
+- **10-Tier Ranking System** - Exponential voting power scaling (G through SSS, 1× → 512× power)
+- **Invite-Based Onboarding** - Decentralized membership growth with 24-hour expiry and 100-day epochs
+- **Timelocked Orders** - 24-hour execution delays with veto rights for member recovery and rank management
+- **Snapshot Voting** - Block-based voting power snapshots preventing flash loan attacks
+- **Multi-Type Treasury** - Support for ETH, ERC20, NFTs, and arbitrary contract calls
+- **Flexible Treasurers** - Both member-based (rank-dependent) and address-based (fixed limits) spending authorities
+- **Emergency Lockdown** - Governance-controlled global transfer lock for crisis scenarios
+- **Comprehensive Audit Trail** - Full security audit documentation with resolved findings
+
+## System Architecture
+
+The Guild DAO consists of two complementary contracts:
+
+1. **RankedMembershipDAO** - Membership management, ranks, invites, timelocked orders, and governance voting
+2. **MembershipTreasury** - Treasury fund management with proposal voting, treasurer systems, and asset controls
 
 ---
 
-# RankedMembershipDAO
+# 🎖️ RankedMembershipDAO Contract
 
-A membership-controlled DAO smart contract with:
-- 10 membership ranks (G → F → E → D → C → B → A → S → SS → SSS)
-- Voting power that **doubles each rank**
-- Invite-based onboarding with **24h expiry** and **100-day invite epochs**
-- Timelocked member-management orders (promotion grants, demotions, authority recovery) with **24h delay + higher-rank veto**
-- Snapshot-based governance proposals (grant rank, demote rank, change authority)
+The core membership and governance engine, implementing a hierarchical member system with exponential voting power, secure invite distribution, and democratic decision-making.
+
+## Key Specifications
+
+### Rank Hierarchy
+
+The Guild DAO uses a 10-tier rank system where each rank represents a position in the hierarchy:
+
+```
+G (Initiate)
+ ↓
+F (Associate) 
+ ↓
+E (Member)
+ ↓
+D (Senior Member)
+ ↓
+C (Advisor)
+ ↓
+B (Officer)
+ ↓
+A (Executive)
+ ↓
+S (Director)
+ ↓
+SS (Senior Director)
+ ↓
+SSS (Founder) ⭐
+```
+
+Internally, ranks map to indices 0–9, where higher indices grant exponentially more power.
+
+### Voting Power (Exponential Scaling)
+
+Each rank doubles the voting power of the previous rank:
+
+| Rank | Index | Voting Power |
+|------|-------|--------------|
+| G | 0 | 1 |
+| F | 1 | 2 |
+| E | 2 | 4 |
+| D | 3 | 8 |
+| C | 4 | 16 |
+| B | 5 | 32 |
+| A | 6 | 64 |
+| S | 7 | 128 |
+| SS | 8 | 256 |
+| SSS | 9 | 512 |
+
+**Formula:** `votingPower(rank) = 2^rankIndex`
+
+This exponential model ensures that higher-ranked members have meaningful influence while maintaining a reasonable distribution curve. A single SSS member has 512× the voting power of a G member but never unilateral control in a diverse DAO.
+
+### Invite Allowance (Same Exponential Model)
+
+Each member can issue invites proportional to their voting power:
+
+**Formula:** `invitesPerEpoch(rank) = 2^rankIndex`
+
+A 100-day epoch resets the invite counter. Invites have a fixed 24-hour expiry, allowing rejected invites to be reclaimed and reissued.
+
+### Proposal Capacity
+
+Proposal limits scale linearly by rank (starting at F):
+
+| Rank | Max Active Proposals |
+|------|-----|
+| G | 0 (cannot propose) |
+| F | 1 |
+| E | 2 |
+| D | 3 |
+| ... | ... |
+| SSS | 9 |
 
 ---
 
-## Contract summary
+### Voting Snapshots & Flash Loan Protection
 
-**Contract:** \`RankedMembershipDAO\`  
-**Solidity:** \`^0.8.24\`  
-**Libraries:** OpenZeppelin (Ownable2Step, Pausable, ReentrancyGuard, SafeCast, Checkpoints)
+Voting uses **block-based voting snapshots** via OpenZeppelin `Checkpoints`:
 
-### Rank ladder
+- When a proposal is created, the voting power of all members is **locked at that block**
+- Votes are counted using each member's voting power **at the snapshot block**
+- This prevents **flash loan attacks** where an attacker could acquire voting power mid-voting through a single transaction
+- Voting delay (1 block minimum) further mitigates same-block voting manipulation
 
-\`G, F, E, D, C, B, A, S, SS, SSS\`
+**Example:** If you receive a rank promotion at block 100, you can vote starting at block 102+ (after a 1-block delay), using your new voting power.
 
-Internally the ranks map to indices \`0..9\`. Higher index = higher power.
-
-### Voting power
-
-Voting weight is:
-
-\`votingPower(rank) = 2^rankIndex\`
-
-So:
-- G = 1
-- F = 2
-- E = 4
-- …
-- SSS = 512
-
-Voting uses **snapshot power** recorded via OpenZeppelin \`Checkpoints\`. A proposal snapshots at its creation block, and votes are counted using the member's voting power at that snapshot block.
-
-### Invite allowance
-
-Invite allowance per epoch uses the same doubling model:
+### Invite Allowance
 
 \`inviteAllowance(rank) = 2^rankIndex\`
 
@@ -59,262 +121,774 @@ Epoch length is fixed at **100 days**. Invite validity is fixed at **24 hours**.
 
 ---
 
-## Deployment / bootstrap
+## Deployment & Bootstrapping
 
 On deployment:
-- The deployer is bootstrapped as a member at rank **SSS**
-- The deployer becomes \`owner\` (via \`Ownable2Step\`)
+- The deployer is bootstrapped as a **SSS-ranked member** (highest authority)
+- The deployer becomes `owner` (via `Ownable2Step` for secure 2-step ownership transfer)
 
-Bootstrap-only helpers exist for initial setup:
-- \`bootstrapAddMember(address authority, Rank rank)\` (owner only)
-- \`finalizeBootstrap()\` (owner only) → permanently ends bootstrap additions
+The owner can initialize the DAO with bootstrap functions:
+- `bootstrapAddMember(address authority, Rank rank)` - Add initial members during setup
+- `finalizeBootstrap()` - Permanently disable bootstrap additions and lock the system
 
-Pausing:
-- \`pause()\` / \`unpause()\` (owner only)
-
----
-
-## Core concepts
-
-### Member identity & authority
-
-Each member has:
-- a unique \`memberId\` (\`uint32\`)
-- a \`rank\`
-- an \`authority\` address
-
-The **authority** address is the account that votes, proposes, issues invites, and issues orders. On join, the authority is the wallet that accepted the invite.
-
-Members can:
-- change their own authority immediately (\`changeMyAuthority\`)
-- be assigned a new authority via a timelocked **AuthorityOrder** (wallet recovery workflow)
-- be assigned a new authority via governance proposal **ChangeAuthority**
-
-The contract enforces:
-- one authority address maps to at most one \`memberId\` at any time
+Emergency control:
+- `pause()` / `unpause()` - Freeze or unfreeze all operations
 
 ---
 
-## Invites
+## Core Concepts
 
-### Flow
+### Member Identity & Authority
 
-1. A member calls \`issueInvite(to)\`  
-2. The invite reserves one invite "slot" in the issuer's current **100-day epoch**
-3. The invite can be claimed by \`to\` within **24 hours** using \`acceptInvite(inviteId)\`
-4. If it expires, the issuer calls \`reclaimExpiredInvite(inviteId)\` to restore the reserved slot
+Each member has three key attributes:
 
-### Accounting rules
+| Attribute | Type | Role |
+|-----------|------|------|
+| **memberId** | uint32 | Unique identifier within the DAO |
+| **rank** | Rank enum | Determines voting power, invite allowance, and proposal limits |
+| **authority** | address | The wallet that controls voting, invites, and orders |
 
-- On \`issueInvite\`, the contract increments \`invitesUsedByEpoch[issuerId][epoch]\` immediately.
-- On \`acceptInvite\`, the invite becomes claimed and mints a new member at rank \`G\`.
-- On \`reclaimExpiredInvite\`, the invite becomes reclaimed and the reserved slot is returned.
+The **authority address** is the wallet that performs all actions on behalf of the member:
+- Voting on proposals
+- Creating new proposals and orders
+- Issuing and accepting invites
+- Recovering their own authority (via timelocked order)
 
-### Invite-related functions
+**Key Invariant:** One authority address = one memberId (1-to-1 mapping)
 
-- \`issueInvite(address to) returns (uint64 inviteId)\`
-- \`acceptInvite(uint64 inviteId) returns (uint32 newMemberId)\`
-- \`reclaimExpiredInvite(uint64 inviteId)\`
+### Authority Management
 
----
+Members can manage their authority through three methods:
 
-## Timelocked Orders (member-to-member)
+1. **Immediate Self-Update** - Change your own authority anytime
+   ```solidity
+   changeMyAuthority(address newAuthority)
+   ```
 
-Orders are "local" actions issued by one member about another member (or their authority). Every order has:
-- **24 hour delay**
-- a **veto window** during that 24 hours
+2. **Timelocked Recovery** - Regain control if your authority address is compromised
+   ```solidity
+   issueAuthorityOrder(targetMemberId, newAuthority)
+   // After 24 hours + veto window, execute the order
+   ```
 
-### Single outstanding order invariant
-
-A target member can have **one** pending order at a time.
-
-### Veto rule
-
-During the 24h window, an order can be blocked by a member whose rank is at least **two ranks above the issuer's rank at creation**:
-
-\`blockerRank >= issuerRankAtCreation + 2\`
-
-### Order types
-
-1. **Promotion grant** - Issuer proposes new rank (at most issuerRank − 2), target must accept after 24h
-2. **Demotion order** - Issuer must be ≥2 ranks above target, reduces rank by one step
-3. **Authority order** - Issuer must be ≥2 ranks above target, schedules new authority address
+3. **Governance Proposal** - DAO can reassign authority for flagged members
+   ```solidity
+   proposeChangeAuthority(targetMemberId, newAuthority)
+   // Requires vote and 24-hour execution delay
+   ```
 
 ---
 
-## Governance proposals (global voting)
+## 📬 Invite System
 
-Governance proposals allow the whole membership to vote to:
-1. **Grant rank to member** (promotion)
-2. **Demote rank of member**
-3. **Change authority** of member
+The invite system enables decentralized membership growth while preventing spam through epoch-based rate limiting.
 
-### Eligibility & proposal limits
+### Invite Flow
 
-- Proposer must be at least rank **F**
-- Each proposer has a cap on **active** proposals based on rank (F=1, E=2, ... SSS=9)
+**Step 1: Issue Invite**
+```
+Member A (rank E, 4 invites/epoch) calls issueInvite(0xBob)
+↓
+Invite #42 created with 24-hour expiry
+Invite slot reserved from A's epoch quota
+```
 
-### Voting & finalization rules
+**Step 2a: Accept Invite (Success Path)**
+```
+Bob calls acceptInvite(42) within 24 hours
+↓
+New Member (rank G) created for Bob
+Bob becomes the authority for their account
+```
 
-- Voting window: **7 days**
-- Passing requires:
-  - **Quorum**: votes cast >= **20%** of total snapshot power
-  - **Majority**: \`yesVotes > noVotes\`
+**Step 2b: Reclaim Invite (Timeout Path)**
+```
+24 hours pass without Bob accepting
+↓
+Member A calls reclaimExpiredInvite(42)
+↓
+Invite slot returned to A's epoch quota
+```
 
----
+### Invite Accounting
 
-# MembershipTreasury
+| Event | Effect |
+|-------|--------|
+| `issueInvite()` | Increments `invitesUsedByEpoch[issuerId][epoch]` |
+| `acceptInvite()` | Creates new member at rank G; invite becomes claimed |
+| `reclaimExpiredInvite()` | Decrements used counter; invite becomes reclaimed |
 
-A comprehensive treasury management contract linked to RankedMembershipDAO with:
-- Proposal-based spending for ETH, ERC20, and NFT transfers
-- **Treasurer system** with preapproved spending limits
-- Two treasurer types: **Member-based** and **Address-based**
-- Separate NFT access controls per collection
-- 24-hour execution delay after proposal passes
+### Core Invite Functions
 
----
+```solidity
+// Issue an invite to a specific address
+issueInvite(address to) returns (uint64 inviteId)
 
-## Contract summary
+// Accept an invite and join the DAO (creates new member at rank G)
+acceptInvite(uint64 inviteId) returns (uint32 newMemberId)
 
-**Contract:** \`MembershipTreasury\`  
-**Solidity:** \`^0.8.24\`  
-**Libraries:** OpenZeppelin (Ownable2Step, Pausable, ReentrancyGuard, SafeCast, IERC20, IERC721)
-
-### Parameters
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| \`VOTING_PERIOD\` | 7 days | Duration of voting window |
-| \`QUORUM_BPS\` | 2000 (20%) | Minimum participation for valid vote |
-| \`EXECUTION_DELAY\` | 24 hours | Timelock after proposal passes |
-
----
-
-## Deposits
-
-The treasury can receive:
-
-### ETH
-- Direct transfers via \`receive()\` function
-- Emits \`DepositedETH(from, amount)\`
-
-### ERC20 Tokens
-- \`depositERC20(address token, uint256 amount)\`
-- Requires prior approval
-- Emits \`DepositedERC20(token, from, amount)\`
-
-### NFTs (ERC721)
-- \`depositNFT(address nftContract, uint256 tokenId)\`
-- Also accepts \`safeTransferFrom\` via \`onERC721Received\`
-- Emits \`DepositedNFT(nftContract, from, tokenId)\`
+// Reclaim a slot if invite expires (unused after 24 hours)
+reclaimExpiredInvite(uint64 inviteId)
+```
 
 ---
 
-## Proposal-Based Spending
+## ⏱️ Timelocked Orders (Member-to-Member Management)
 
-All treasury actions require member voting (except treasurer direct spending within limits).
+Orders provide a decentralized way for higher-ranked members to manage other members, with built-in safety mechanisms: 24-hour delays and rank-based veto rights.
+
+### Order Lifecycle
+
+Every order follows the same flow:
+
+```
+1. Issue Order (T=0)
+   ↓
+2. Veto Window (24 hours)
+   Higher-ranked members can block
+   ↓
+3. Execution Window (after T+24h)
+   Original issuer executes the order
+```
+
+### Single Outstanding Order Invariant
+
+Each member can have **at most one pending order at a time**. This prevents order spam and ensures clear, sequential rank/authority management.
+
+### Veto Protection
+
+During the 24-hour window, higher-ranked members can veto an order if:
+
+$$\text{blockerRank} \geq \text{issuerRank} + 2$$
+
+**Example Veto Scenarios:**
+- A B-ranked member issues an order → Only A, S, SS, or SSS can veto it
+- An SSS-ranked member issues an order → No one can veto (they're already highest)
+- A G-ranked member issues an order → Any member at rank B+ can veto it
+
+This creates a natural checks-and-balance system where authority isn't completely centralized.
+
+### Order Types
+
+#### 1. Promotion Grants
+
+A member proposes to promote another member one rank.
+
+```solidity
+issuePromotionGrant(uint32 targetId, Rank newRank)
+// New rank must be <= issuerRank - 2 (can't promote above yourself)
+// Target must accept via acceptPromotionGrant(orderId)
+```
+
+**Key:**
+- Only higher-ranked members can issue promotions
+- Target has flexibility - they can accept or decline
+- Useful for mentorship and rank progression
+
+#### 2. Demotion Orders
+
+A member (≥2 ranks higher) can demote another member by one rank.
+
+```solidity
+issueDemotionOrder(uint32 targetId)
+// Issuer must be >= 2 ranks above target
+// Executes automatically after veto window
+```
+
+**Key:**
+- No target consent needed (immediate after veto window)
+- Used for enforcement and rule violations
+- Can only demote by 1 rank at a time (sequential)
+
+#### 3. Authority Orders
+
+A member (≥2 ranks higher) can reassign another member's authority address.
+
+```solidity
+issueAuthorityOrder(uint32 targetId, address newAuthority)
+// Useful for wallet recovery, multisig transitions, etc.
+```
+
+**Key:**
+- Enables account recovery if private key is lost
+- Can also reassign authority to a multisig or other contract
+- Subject to veto like other orders
+
+### Order Management Functions
+
+```solidity
+// Issue orders
+issuePromotionGrant(uint32 targetId, Rank newRank)
+issueDemotionOrder(uint32 targetId)
+issueAuthorityOrder(uint32 targetId, address newAuthority)
+
+// Accept (promotion only)
+acceptPromotionGrant(uint64 orderId)
+
+// Veto (higher-ranked members only)
+blockOrder(uint64 orderId)
+
+// Execute (after veto window + delay)
+executeOrder(uint64 orderId)
+```
+
+---
+
+## 🗳️ Governance Proposals (Global Voting)
+
+Governance proposals enable the entire membership to vote on important decisions. Unlike orders (which are member-to-member), proposals use snapshot voting and require community consensus.
+
+### Proposal Types
+
+The DAO can vote on:
+
+1. **Grant Rank** - Promote a member via democratic vote
+2. **Demote Rank** - Remove a member's rank via vote
+3. **Change Authority** - Reassign member's controlling wallet
+
+### Proposal Eligibility
+
+| Criterion | Requirement |
+|-----------|-----------|
+| **Proposer Rank** | F or higher |
+| **Max Active Proposals** | Varies by rank (F=1, E=2, ..., SSS=9) |
+| **Voting Period** | 7 days |
+| **Passing Requires** | Quorum (20% participation) + Majority (yesVotes > noVotes) |
+
+### Proposal Timeline
+
+```
+Day 0: Proposal Created
+  ├─ Block snapshot taken
+  └─ Voting enabled (1 block delay)
+  
+Days 0-7: Voting Window
+  └─ Members cast votes
+  
+Day 7: Voting Ends
+  └─ Anyone can finalize
+  
+Day 7-8: Execution Delay (24h)
+  └─ Timelock enforced
+  
+Day 8+: Ready to Execute
+  └─ Anyone can execute
+```
+
+### Core Proposal Functions
+
+```solidity
+// Create proposals
+proposeGrantRank(uint32 targetId, Rank newRank)
+proposeDemoteRank(uint32 targetId, Rank newRank)
+proposeChangeAuthority(uint32 targetId, address newAuthority)
+
+// Vote
+castVote(uint64 proposalId, bool support)
+
+// Finalize & Execute
+finalize(uint64 proposalId)
+execute(uint64 proposalId)
+```
+
+---
+
+# 💰 MembershipTreasury Contract
+
+The treasury management contract provides powerful fund controls paired with the RankedMembershipDAO membership system. It enables:
+
+- **Democratic spending** - Members vote on large transactions
+- **Delegated spending** - Treasurers handle routine fund management
+- **Multi-asset support** - ETH, ERC20, ERC721, and arbitrary calls
+- **Emergency controls** - Governance-controlled global transfer lock
+- **Flexible treasury roles** - Member-based and address-based treasurers
+
+
+# 💰 MembershipTreasury Contract
+
+The treasury management contract provides powerful fund controls paired with the RankedMembershipDAO membership system. It enables:
+
+- **Democratic spending** - Members vote on large transactions
+- **Delegated spending** - Treasurers handle routine fund management
+- **Multi-asset support** - ETH, ERC20, ERC721, and arbitrary calls
+- **Emergency controls** - Governance-controlled global transfer lock
+- **Flexible treasury roles** - Member-based and address-based treasurers
+
+### Technical Overview
+
+| Property | Value |
+|----------|-------|
+| **Contract** | `MembershipTreasury` |
+| **Solidity** | `^0.8.24` |
+| **Size** | ~2,181 lines |
+| **Main Dependencies** | OpenZeppelin v5+, IRankedMembershipDAO interface |
+| **Key Libraries** | Ownable2Step, Pausable, ReentrancyGuard, SafeERC20, Checkpoints |
+
+### Governance Parameters
+
+These are set via governance proposals (not owner functions):
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| **votingPeriod** | 7 days | Duration of voting windows |
+| **quorumBps** | 20% | Minimum voting participation required |
+| **executionDelay** | 24 hours | Timelock after proposal passes |
+| **callActionsEnabled** | false | Whether arbitrary Call actions are allowed |
+| **treasurerCallsEnabled** | false | Whether treasurers can execute calls |
+
+---
+
+## 📥 Deposits & Fund Management
+
+The treasury receives funds through multiple channels:
+
+### ETH Deposits
+
+```solidity
+receive() external payable
+// Simply send ETH to the contract address
+// Emits: DepositedETH(from, amount)
+```
+
+**Use Cases:**
+- Direct ETH transfers from community members
+- Yield from external protocols
+- Grant funding
+
+### ERC20 Token Deposits
+
+```solidity
+depositERC20(address token, uint256 amount)
+// Requires: token approval from sender
+// Emits: DepositedERC20(token, from, amount)
+```
+
+**Use Cases:**
+- Stablecoins (USDC, DAI, etc.)
+- Utility tokens
+- Governance tokens
+
+### NFT Deposits
+
+The treasury can hold and manage ERC721 NFTs:
+
+```solidity
+// Direct call
+depositNFT(address nftContract, uint256 tokenId)
+
+// Or via safeTransferFrom
+onERC721Received(address, address from, uint256 tokenId, bytes data)
+// Emits: DepositedNFT(nftContract, from, tokenId)
+```
+
+**Use Cases:**
+- Community art and collectibles
+- Membership badges
+- Governance tokens with NFT utility
+
+---
+
+## 🎁 Proposal-Based Spending
+
+For significant treasury actions, the entire membership votes to approve spending.
 
 ### Action Types
 
-| ActionType | Description |
-|------------|-------------|
-| \`TransferETH\` | Send ETH to an address |
-| \`TransferERC20\` | Send ERC20 tokens to an address |
-| \`TransferNFT\` | Send specific NFT (by tokenId) to an address |
-| \`Call\` | Execute arbitrary call with ETH value and calldata |
-| \`SetCallActionsEnabled\` | Enable/disable arbitrary Call proposals |
-| \`SetTreasurerCallsEnabled\` | Enable/disable treasurer Call functionality |
-| \`AddApprovedCallTarget\` | Add contract to treasurer call whitelist |
-| \`RemoveApprovedCallTarget\` | Remove contract from treasurer call whitelist |
+The treasury supports multiple action types, enabling flexible governance:
 
-### Proposal Flow
+| Action | Description | Who Votes? |
+|--------|-------------|-----------|
+| `TransferETH` | Send ETH to recipient | All members |
+| `TransferERC20` | Send tokens to recipient | All members |
+| `TransferNFT` | Send specific NFT to recipient | All members |
+| `Call` | Execute arbitrary call (if enabled) | All members |
+| `SetCallActionsEnabled` | Enable/disable Call actions | All members |
+| `SetTreasurerCallsEnabled` | Enable/disable treasurer calls | All members |
+| `AddApprovedCallTarget` | Add to call whitelist | All members |
+| `RemoveApprovedCallTarget` | Remove from call whitelist | All members |
+| `SetTransfersLocked` | Globally lock all transfers (emergency) | All members |
 
-1. **Create** - Member (rank F+) creates proposal
-2. **Vote** - Members vote during 7-day window
-3. **Finalize** - Anyone finalizes after voting ends
-4. **Execute** - Anyone executes after 24-hour delay (if passed)
+### Proposal Timeline
 
-### Proposal Functions
+```
+Day 0: Proposal Created
+  └─ Included in next voting batch
 
-\`\`\`solidity
-// ETH transfer
-proposeTransferETH(address to, uint256 amount) returns (uint64 proposalId)
+Days 0-7: Voting Window
+  └─ Members cast votes using snapshot power
+  
+Day 7: Voting Ends
+  └─ Anyone calls finalize()
+  
+Day 7-8: Execution Delay (24h timelock)
+  └─ Prevents rushed execution
+  
+Day 8+: Ready to Execute
+  └─ Anyone calls execute()
+  └─ Funds transferred if passed
+```
 
-// ERC20 transfer
-proposeTransferERC20(address token, address to, uint256 amount) returns (uint64 proposalId)
+### Creating Proposals
 
-// NFT transfer (includes specific tokenId)
-proposeTransferNFT(address nftContract, address to, uint256 tokenId) returns (uint64 proposalId)
+```solidity
+// Spending proposals
+proposeTransferETH(address to, uint256 amount)
+proposeTransferERC20(address token, address to, uint256 amount)
+proposeTransferNFT(address nftContract, address to, uint256 tokenId)
+proposeCall(address target, uint256 value, bytes calldata data)
 
-// Arbitrary call
-proposeCall(address target, uint256 value, bytes calldata data) returns (uint64 proposalId)
+// Settings governance
+proposeSetCallActionsEnabled(bool enabled)
+proposeSetTreasurerCallsEnabled(bool enabled)
+proposeAddApprovedCallTarget(address target)
+proposeRemoveApprovedCallTarget(address target)
+proposeSetTransfersLocked(bool locked)
 
-// Voting
+// Treasurer management
+proposeAddMemberTreasurer(uint32 memberId, ...)
+proposeUpdateMemberTreasurer(uint32 memberId, ...)
+proposeRemoveMemberTreasurer(uint32 memberId)
+proposeAddAddressTreasurer(address treasurer, ...)
+proposeUpdateAddressTreasurer(address treasurer, ...)
+proposeRemoveAddressTreasurer(address treasurer)
+
+// NFT access control
+proposeGrantMemberNFTAccess(uint32 memberId, address nftContract, ...)
+proposeRevokeMemberNFTAccess(uint32 memberId, address nftContract)
+proposeGrantAddressNFTAccess(address treasurer, address nftContract, ...)
+proposeRevokeAddressNFTAccess(address treasurer, address nftContract)
+```
+
+### Voting & Finalization
+
+```solidity
+// Cast your vote (during voting window)
 castVote(uint64 proposalId, bool support)
+// support=true for YES, support=false for NO
 
-// Finalization & Execution
+// Finalize after voting ends
 finalize(uint64 proposalId)
+// Sets proposal status to passed/failed + calculates execution delay
+
+// Execute after timelock expires
 execute(uint64 proposalId)
-\`\`\`
+// Transfers funds or updates settings
+```
 
 ---
 
-## Treasurer System
+## 👥 Treasurer System
 
-Treasurers can spend directly from the treasury within preapproved limits, without requiring a full proposal vote for each transaction.
+Treasurers handle routine spending without requiring full proposal votes, subject to preapproved limits.
+
+### Treasurer Concept
+
+A **treasurer** is an authorized entity (member or address) who can spend up to preset limits per period:
+
+```
+Treasury Fund
+    ├─ Proposal Voting (for large/unusual spending)
+    └─ Treasurer Allowances (for routine spending)
+        ├─ Member-based (rank-dependent limits)
+        └─ Address-based (fixed limits)
+```
+
+**Benefits:**
+- Fast, routine spending for operational needs
+- No vote required for routine operations
+- Clear, auditable spending limits
+- Automatic period resets
 
 ### Two Treasurer Types
 
-#### 1. Member-Based Treasurers
+#### Member-Based Treasurers
 
-Linked to a DAO member ID. Authority is derived from the member's current rank in the DAO.
+Treasurers linked to DAO members. Spending limits scale with the member's current rank.
 
-**Features:**
-- Spending limits scale with rank (voting power)
-- Minimum rank requirement enforced
-- If member is demoted below minimum rank, treasurer access is suspended
-- Limit formula: \`baseSpendingLimit + (spendingLimitPerRankPower × votingPower)\`
+**Key Features:**
+- Limits depend on member's rank (higher rank = higher spending power)
+- If member is demoted, treasurer access can be suspended
+- Includes a minimum rank requirement for operation
+- Separate token limits per ERC20
 
-#### 2. Address-Based Treasurers
+**Configuration:**
+```solidity
+struct TreasurerConfig {
+    uint256 baseSpendingLimit;           // Base ETH per period
+    uint256 spendingLimitPerRankPower;   // Additional ETH per voting power unit
+    uint64 periodDuration;               // e.g., 1 day
+    Rank minRank;                        // Minimum required rank to spend
+}
+```
 
-Direct authority granted to a specific address (can be EOA, multisig, or contract).
+**Spending Formula:**
+$$\text{ethLimit} = \text{baseLimit} + (\text{perRankPower} \times \text{votingPower})$$
 
-**Features:**
-- Fixed spending limit
-- Not tied to DAO membership
-- Useful for external integrations, service accounts, or multisigs
+**Example:**
+- Member (rank A, voting power 64) with base 1 ETH, per-power 0.01 ETH
+- Monthly limit = 1 + (0.01 × 64) = 1.64 ETH/month
 
-### Treasurer Configuration
+#### Address-Based Treasurers
 
-| Field | Description |
-|-------|-------------|
-| \`baseSpendingLimit\` | Base ETH limit per period (wei) |
-| \`spendingLimitPerRankPower\` | Additional limit per voting power unit (member-based only) |
-| \`periodDuration\` | Reset period in seconds (e.g., 1 day, 1 week) |
-| \`minRank\` | Minimum rank required (member-based only) |
+Treasurers with fixed spending limits, not tied to DAO membership.
+
+**Key Features:**
+- Fixed spending limit (no rank dependency)
+- Can be EOA, multisig, or contract address
+- Perfect for service accounts or external integrations
+- Simpler configuration
+
+**Configuration:**
+```solidity
+struct TreasurerConfig {
+    uint256 baseSpendingLimit;  // Fixed ETH per period
+    uint64 periodDuration;       // e.g., 1 week
+}
+```
+
+### Managing Treasurers
+
+All treasurer actions go through governance voting:
+
+```solidity
+// Member-based treasurers
+proposeAddMemberTreasurer(
+    uint32 memberId,
+    uint256 baseSpendingLimit,
+    uint256 spendingLimitPerRankPower,
+    uint64 periodDuration,
+    Rank minRank
+)
+
+proposeUpdateMemberTreasurer(
+    uint32 memberId,
+    uint256 baseSpendingLimit,
+    uint256 spendingLimitPerRankPower,
+    uint64 periodDuration,
+    Rank minRank
+)
+
+proposeRemoveMemberTreasurer(uint32 memberId)
+
+// Address-based treasurers
+proposeAddAddressTreasurer(
+    address treasurer,
+    uint256 baseSpendingLimit,
+    uint64 periodDuration
+)
+
+proposeUpdateAddressTreasurer(
+    address treasurer,
+    uint256 baseSpendingLimit,
+    uint64 periodDuration
+)
+
+proposeRemoveAddressTreasurer(address treasurer)
+```
+
+### Direct Treasurer Spending
+
+Once approved, treasurers can spend without voting:
+
+```solidity
+// ETH spending (within period limit)
+treasurerSpendETH(address to, uint256 amount)
+
+// ERC20 spending (within token-specific limit)
+treasurerSpendERC20(address token, address to, uint256 amount)
+
+// Authorized contract calls (requires target in whitelist)
+treasurerCall(address target, uint256 value, bytes calldata data)
+```
+
+**Spending Limit Reset:** Automatically rolls over every `periodDuration` seconds
 
 ### Token-Specific Limits
 
-Each treasurer can have separate limits per ERC20 token:
-- \`baseLimit\` - Base token limit per period
-- \`limitPerRankPower\` - Additional limit per voting power (member-based only)
+Treasurers can have separate per-token limits (e.g., 1,000 USDC/month):
 
-### Managing Treasurers (Proposal-Based)
+```solidity
+// Set token limit for member-based treasurer
+proposeSetMemberTreasurerTokenConfig(
+    uint32 memberId,
+    address token,
+    uint256 baseLimit,
+    uint256 limitPerRankPower
+)
 
-All treasurer management goes through voting:
+// Set token limit for address-based treasurer
+proposeSetAddressTreasurerTokenConfig(
+    address treasurer,
+    address token,
+    uint256 limit
+)
+```
 
-\`\`\`solidity
-// Member-based treasurers
-proposeAddMemberTreasurer(uint32 memberId, uint256 baseSpendingLimit, uint256 spendingLimitPerRankPower, uint64 periodDuration, Rank minRank)
-proposeUpdateMemberTreasurer(uint32 memberId, uint256 baseSpendingLimit, uint256 spendingLimitPerRankPower, uint64 periodDuration, Rank minRank)
-proposeRemoveMemberTreasurer(uint32 memberId)
-proposeSetMemberTreasurerTokenConfig(uint32 memberId, address token, uint256 baseLimit, uint256 limitPerRankPower)
+### Treasurer View Functions
 
-// Address-based treasurers
-proposeAddAddressTreasurer(address treasurer, uint256 baseSpendingLimit, uint64 periodDuration)
-proposeUpdateAddressTreasurer(address treasurer, uint256 baseSpendingLimit, uint64 periodDuration)
-proposeRemoveAddressTreasurer(address treasurer)
-proposeSetAddressTreasurerTokenConfig(address treasurer, address token, uint256 limit)
+```solidity
+// Check if address is a treasurer and get type
+isTreasurer(address spender)
+  returns (bool, TreasurerType)
+
+// Get treasurer configuration
+getMemberTreasurerConfig(uint32 memberId)
+getAddressTreasurerConfig(address treasurer)
+
+// Check remaining limit for current period
+getTreasurerRemainingLimit(address spender)
+getTreasurerRemainingTokenLimit(address spender, address token)
+```
+
+---
+
+## 🏛️ NFT Management
+
+The treasury can hold, manage, and distribute NFTs with fine-grained access controls.
+
+### NFT Access Control
+
+Treasurers can be granted permission to transfer specific NFT collections:
+
+```solidity
+struct NFTAccessConfig {
+    bool hasAccess;           // Can transfer from this collection
+    uint64 transfersPerPeriod; // 0 = unlimited
+    uint64 periodDuration;     // Reset interval
+    Rank minRank;             // (member-based only)
+}
+```
+
+### Granting NFT Access
+
+```solidity
+// Member-based NFT access
+proposeGrantMemberNFTAccess(
+    uint32 memberId,
+    address nftContract,
+    uint64 transfersPerPeriod,
+    uint64 periodDuration,
+    Rank minRank
+)
+
+// Address-based NFT access
+proposeGrantAddressNFTAccess(
+    address treasurer,
+    address nftContract,
+    uint64 transfersPerPeriod,
+    uint64 periodDuration
+)
+
+// Revoke access
+proposeRevokeMemberNFTAccess(uint32 memberId, address nftContract)
+proposeRevokeAddressNFTAccess(address treasurer, address nftContract)
+```
+
+### NFT Transfers
+
+```solidity
+// Treasurer can transfer if authorized for that collection
+treasurerTransferNFT(
+    address nftContract,
+    address to,
+    uint256 tokenId
+)
+
+// Regular proposal for any NFT in treasury
+proposeTransferNFT(
+    address nftContract,
+    address to,
+    uint256 tokenId
+)
+```
+
+---
+
+## 🚨 Emergency Control: Global Transfer Lock
+
+The DAO can vote to globally freeze all transfers in emergency situations.
+
+### How It Works
+
+```solidity
+// Proposal to lock transfers
+proposeSetTransfersLocked(bool locked)
+// Requires vote and execution delay
+
+// Blocks all:
+treasurerSpendETH()
+treasurerSpendERC20()
+treasurerTransferNFT()
+execute(TransferETH)
+execute(TransferERC20)
+execute(TransferNFT)
+```
+
+**Use Cases:**
+- Security incident detection
+- Bridge/smart contract vulnerability
+- Emergency fund preservation during governance crisis
+
+---
+
+## ⚙️ Configuration & Security
+
+### Owner Functions
+
+| Function | Effect |
+|----------|--------|
+| `pause()` | Freeze all operations (emergency) |
+| `unpause()` | Resume operations |
+
+**Note:** Most treasury settings are now controlled via governance proposals, not owner functions, to ensure democratic control.
+
+### Security Layers
+
+The treasury implements multiple security layers:
+
+1. **Voting Requirements** - All spending decisions require member votes
+2. **Execution Delays** - 24-hour timelock prevents rushed execution  
+3. **Spending Limits** - Treasurers have capped, resetting allowances
+4. **Rank Requirements** - Member treasurers need minimum rank
+5. **Call Whitelist** - Treasurer calls limited to approved targets
+6. **Snapshot Voting** - Voting power locked at block height (no flash loans)
+7. **ReentrancyGuard** - Protection against reentrancy attacks
+8. **Pausable** - Emergency stop for all operations
+9. **Transfer Lock** - Governance-controlled global spending freeze
+
+---
+
+## 📊 Events & Transparency
+
+### Deposit Events
+- `DepositedETH(address indexed from, uint256 amount)`
+- `DepositedERC20(address indexed token, address indexed from, uint256 amount)`
+- `DepositedNFT(address indexed nftContract, address indexed from, uint256 tokenId)`
+
+### Proposal Events
+- `TreasuryProposalCreated(uint64 id, address proposer, ActionType actionType, ...)`
+- `TreasuryVoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight)`
+- `TreasuryProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes, uint64 executableAfter)`
+- `TreasuryProposalExecuted(uint64 indexed proposalId)`
+
+### Spending Events
+- `TreasurerSpent(address indexed spender, TreasurerType, address indexed recipient, address indexed token, uint256 amount)`
+- `TreasurerCallExecuted(address indexed spender, TreasurerType, address indexed target, uint256 value, bytes data)`
+- `TreasurerNFTTransferred(address indexed spender, TreasurerType, address indexed nftContract, address indexed to, uint256 tokenId)`
+
+### Settings Events
+- `CallActionsEnabledSet(bool enabled)`
+- `TreasurerCallsEnabledSet(bool enabled)`
+- `ApprovedCallTargetAdded(address indexed target)`
+- `ApprovedCallTargetRemoved(address indexed target)`
+- `TransfersLockedSet(bool locked)`
+- `NFTTransferred(address indexed nftContract, address indexed to, uint256 tokenId)`
+
+---
+
+## 🎯 Quick Start Reference
+
+### For MembersproposeSetAddressTreasurerTokenConfig(address treasurer, address token, uint256 limit)
 \`\`\`
 
 ### Direct Treasurer Spending
@@ -441,161 +1015,192 @@ This ensures all treasury configuration changes require member consensus.
 
 ---
 
-## Admin Functions
+---
 
-| Function | Access | Description |
-|----------|--------|-------------|
-| \`pause()\` | Owner | Pause all operations |
-| \`unpause()\` | Owner | Resume operations |
-| \`setCapsEnabled(bool)\` | Owner | Enable/disable spending caps |
-| \`setDailyCap(address, uint256)\` | Owner | Set daily cap for asset |
+## 🎯 Quick Start Reference
 
-Note: \`callActionsEnabled\` and \`treasurerCallsEnabled\` are now controlled via governance proposals, not owner functions.
+### For DAO Members
+
+**Membership Actions:**
+```solidity
+issueInvite(address to)                              // Invite someone
+acceptInvite(uint64 inviteId)                        // Join via invite
+reclaimExpiredInvite(uint64 inviteId)                // Reclaim unused invite
+changeMyAuthority(address newAuthority)              // Update your authority
+```
+
+**Timelocked Orders (Member Management):**
+```solidity
+issuePromotionGrant(uint32 targetId, Rank newRank)  // Propose rank increase
+acceptPromotionGrant(uint64 orderId)                 // Accept promotion offer
+issueDemotionOrder(uint32 targetId)                  // Demote (if authorized)
+issueAuthorityOrder(uint32 targetId, address new)   // Reassign authority
+blockOrder(uint64 orderId)                           // Veto a pending order
+executeOrder(uint64 orderId)                         // Execute after delay
+```
+
+**Governance Proposals:**
+```solidity
+proposeGrantRank(uint32 targetId, Rank newRank)     // Vote to promote
+proposeDemoteRank(uint32 targetId, Rank newRank)    // Vote to demote
+proposeChangeAuthority(uint32 targetId, address new) // Vote to reassign
+castVote(uint64 proposalId, bool support)           // Cast your vote
+finalize(uint64 proposalId)                         // Finalize after voting
+```
+
+### For Treasury Spending
+
+**Deposit Funds:**
+```solidity
+// ETH - just send to contract
+receive()
+
+// ERC20 - needs approval first
+depositERC20(address token, uint256 amount)
+
+// NFTs
+depositNFT(address nftContract, uint256 tokenId)
+```
+
+**Propose Spending:**
+```solidity
+proposeTransferETH(address to, uint256 amount)
+proposeTransferERC20(address token, address to, uint256 amount)
+proposeTransferNFT(address nftContract, address to, uint256 tokenId)
+proposeCall(address target, uint256 value, bytes calldata data)
+
+// Settings
+proposeSetTransfersLocked(bool locked)               // Emergency freeze
+```
+
+**Treasurer Management:**
+```solidity
+proposeAddMemberTreasurer(uint32 memberId, ...)
+proposeUpdateMemberTreasurer(uint32 memberId, ...)
+proposeRemoveMemberTreasurer(uint32 memberId)
+
+proposeAddAddressTreasurer(address treasurer, ...)
+proposeUpdateAddressTreasurer(address treasurer, ...)
+proposeRemoveAddressTreasurer(address treasurer)
+```
+
+**Treasurer Direct Spending (if authorized):**
+```solidity
+treasurerSpendETH(address to, uint256 amount)
+treasurerSpendERC20(address token, address to, uint256 amount)
+treasurerTransferNFT(address nftContract, address to, uint256 tokenId)
+treasurerCall(address target, uint256 value, bytes calldata data)
+```
+
+### For Treasury Queries
+
+```solidity
+// Check balance
+balanceETH()
+balanceERC20(address token)
+
+// Check NFT ownership
+ownsNFT(address nftContract, uint256 tokenId)
+
+// Check treasurer status
+isTreasurer(address spender)
+getTreasurerRemainingLimit(address spender)
+getTreasurerRemainingTokenLimit(address spender, address token)
+
+// Check NFT access
+hasNFTAccess(address spender, address nftContract)
+getMemberNFTRemainingTransfers(uint32 memberId, address nftContract)
+```
 
 ---
 
-## Security Model
+## 📋 Updates & Improvements
 
-### Treasury Security Layers
+### Latest Security Fixes (v1.0)
 
-1. **Proposal Voting** - All spending requires member vote (7 days)
-2. **Execution Delay** - 24-hour timelock after passing
-3. **Treasurer Limits** - Preapproved treasurers have capped spending
-4. **Period Resets** - Treasurer limits reset periodically
-5. **Rank Requirements** - Member-based treasurers need minimum rank
-6. **Optional Caps** - Owner can enable global daily limits
-7. **Pausable** - Owner can halt all operations in emergency
+✅ **Critical [C-01]** - Call Action Target Whitelist enforcement  
+✅ **High [H-01]** - Flash Loan Voting Attack Prevention (1-block delay)  
+✅ **High [H-02]** - Treasurer Period Reset Bug Fix  
+✅ **Medium [M-01]** - Minimum Quorum (1 vote) Requirement  
+✅ **Medium [M-04]** - Spending Limit Per Rank Cap  
+✅ **Medium [M-07]** - Treasurer NFT Ownership Check
 
-### Contract Security
+### Recent Enhancements
 
-- **ReentrancyGuard** on all state-changing functions
-- **Pausable** for emergency stops
-- **Ownable2Step** for safe owner transfers
-- **Snapshot voting** prevents vote manipulation
-- **Custom errors** for gas-efficient reverts
+🎁 **Global Transfer Lock** - Governance can freeze all transfers in emergencies  
+🔒 **Enhanced Treasury Security** - Voting power snapshots prevent flash loan attacks  
+⚙️ **Governance-Controlled Settings** - Critical parameters managed by DAO votes  
+📊 **Comprehensive Audit Trail** - Full event logging for transparency  
 
----
-
-## Events
-
-### Deposit Events
-- \`DepositedETH(address indexed from, uint256 amount)\`
-- \`DepositedERC20(address indexed token, address indexed from, uint256 amount)\`
-- \`DepositedNFT(address indexed nftContract, address indexed from, uint256 tokenId)\`
-
-### Proposal Events
-- \`TreasuryProposalCreated(...)\`
-- \`TreasuryVoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight)\`
-- \`TreasuryProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes, uint64 executableAfter)\`
-- \`TreasuryProposalExecuted(uint64 indexed proposalId)\`
-
-### Treasurer Events
-- \`MemberTreasurerAdded/Updated/Removed\`
-- \`AddressTreasurerAdded/Updated/Removed\`
-- \`MemberTreasurerTokenConfigSet\`
-- \`AddressTreasurerTokenConfigSet\`
-- \`TreasurerSpent(address indexed spender, TreasurerType, address indexed recipient, address indexed token, uint256 amount)\`
-- \`TreasurerCallExecuted(address indexed spender, TreasurerType, address indexed target, uint256 value, bytes data)\`
-
-### Settings Events
-- \`CallActionsEnabledSet(bool enabled)\`
-- \`TreasurerCallsEnabledSet(bool enabled)\`
-- \`ApprovedCallTargetAdded(address indexed target)\`
-- \`ApprovedCallTargetRemoved(address indexed target)\`
-
-### NFT Events
-- \`NFTTransferred(address indexed nftContract, address indexed to, uint256 tokenId)\`
-- \`MemberNFTAccessGranted/Revoked\`
-- \`AddressNFTAccessGranted/Revoked\`
-- \`TreasurerNFTTransferred(address indexed spender, TreasurerType, address indexed nftContract, address indexed to, uint256 tokenId)\`
+See `CHANGELOG.md` for complete history and `AUDIT.md` for security details.
 
 ---
 
-## Quick Reference: DAO Entrypoints
+## 📚 Documentation
 
-### Member Actions
-- \`issueInvite(to)\`
-- \`acceptInvite(inviteId)\`
-- \`reclaimExpiredInvite(inviteId)\`
-- \`changeMyAuthority(newAuthority)\`
-
-### Orders
-- \`issuePromotionGrant(targetId, newRank)\`
-- \`acceptPromotionGrant(orderId)\`
-- \`issueDemotionOrder(targetId)\`
-- \`issueAuthorityOrder(targetId, newAuthority)\`
-- \`blockOrder(orderId)\`
-- \`executeOrder(orderId)\`
-
-### Governance
-- \`createProposalGrantRank(targetId, newRank)\`
-- \`createProposalDemoteRank(targetId, newRank)\`
-- \`createProposalChangeAuthority(targetId, newAuthority)\`
-- \`castVote(proposalId, support)\`
-- \`finalizeProposal(proposalId)\`
+- **`AUDIT.md`** - Complete security audit report with findings and resolutions
+- **`CHANGELOG.md`** - Version history, fixes, and new features
+- **`RankedMembershipDAO.sol`** - Core membership and governance contract
+- **`MembershipTreasury.sol`** - Treasury management contract
 
 ---
 
-## Quick Reference: Treasury Entrypoints
+## 💡 Architecture Highlights
 
-### Deposits
-- \`receive()\` - ETH
-- \`depositERC20(token, amount)\`
-- \`depositNFT(nftContract, tokenId)\`
+### Design Principles
 
-### Proposals (Spending)
-- \`proposeTransferETH(to, amount)\`
-- \`proposeTransferERC20(token, to, amount)\`
-- \`proposeTransferNFT(nftContract, to, tokenId)\`
-- \`proposeCall(target, value, data)\`
+1. **Decentralization** - No centralized admin; membership controls everything
+2. **Transparency** - All actions logged via events; no hidden spending
+3. **Safety** - Multiple security layers (voting, timelocks, limits, snapshots)
+4. **Flexibility** - Supports diverse asset types and spending models
+5. **Scalability** - Efficient snapshot voting, no on-chain state explosion
 
-### Proposals (Treasurer Management)
-- \`proposeAddMemberTreasurer(...)\`
-- \`proposeUpdateMemberTreasurer(...)\`
-- \`proposeRemoveMemberTreasurer(memberId)\`
-- \`proposeAddAddressTreasurer(...)\`
-- \`proposeUpdateAddressTreasurer(...)\`
-- \`proposeRemoveAddressTreasurer(treasurer)\`
-- \`proposeSetMemberTreasurerTokenConfig(...)\`
-- \`proposeSetAddressTreasurerTokenConfig(...)\`
+### Key Trade-offs
 
-### Proposals (NFT Access)
-- \`proposeGrantMemberNFTAccess(...)\`
-- \`proposeRevokeMemberNFTAccess(memberId, nftContract)\`
-- \`proposeGrantAddressNFTAccess(...)\`
-- \`proposeRevokeAddressNFTAccess(treasurer, nftContract)\`
+| Aspect | Choice | Rationale |
+|--------|--------|-----------|
+| **Voting Power** | Exponential (2^rank) | Scales with trust level; prevents dilution at higher ranks |
+| **Execution Delay** | 24-hour fixed | Provides time to detect/react to malicious proposals |
+| **Veto Mechanism** | Rank-based (+2 ranks) | Prevents abuse by lower ranks; reasonable governance friction |
+| **Invite Epochs** | 100 days | Long enough for strategic planning; prevents gaming |
+| **Treasury Proposal Voting** | 7 days | Extended window for broader participation |
 
-### Proposals (Settings Governance)
-- \`proposeSetCallActionsEnabled(enabled)\`
-- \`proposeSetTreasurerCallsEnabled(enabled)\`
-- \`proposeAddApprovedCallTarget(target)\`
-- \`proposeRemoveApprovedCallTarget(target)\`
+---
 
-### Voting & Execution
-- \`castVote(proposalId, support)\`
-- \`finalize(proposalId)\`
-- \`execute(proposalId)\`
+## 🚀 Deployment
 
-### Treasurer Direct Spending
-- \`treasurerSpendETH(to, amount)\`
-- \`treasurerSpendERC20(token, to, amount)\`
-- \`treasurerTransferNFT(nftContract, to, tokenId)\`
-- \`treasurerCall(target, value, data)\` - requires enabled + approved target
+### Prerequisites
 
-### Views
-- \`getProposal(proposalId)\`
-- \`balanceETH()\`
-- \`balanceERC20(token)\`
-- \`ownsNFT(nftContract, tokenId)\`
-- \`isTreasurer(address)\`
-- \`getTreasurerRemainingLimit(address)\`
-- \`hasNFTAccess(address, nftContract)\`
-- \`callActionsEnabled\` - whether Call proposals can execute
-- \`treasurerCallsEnabled\` - whether treasurers can use treasurerCall
-- \`approvedCallTargets(address)\` - whether address is approved for treasurer calls
+- Solidity ^0.8.24
+- OpenZeppelin Contracts v5+
+- Web3 provider (Ethereum-compatible network)
+
+### Initialization Steps
+
+1. Deploy `RankedMembershipDAO` contract
+   - Deployer automatically becomes SSS rank member and owner
+2. Deploy `MembershipTreasury` contract
+   - Pass `RankedMembershipDAO` address as immutable param
+3. Call `finalizeBootstrap()` to lock bootstrap phase
+4. Initialize treasurers via governance proposals
+5. Begin operations
+
+See deployment files for specific instructions.
+
+---
+
+## 📞 Support & Community
+
+For questions about:
+- **Usage** - See function docstrings in contracts
+- **Security** - Review `AUDIT.md` and security findings
+- **Integration** - Reference the `Quick Start` section above
+- **Issues** - Check `CHANGELOG.md` for known issues and fixes
 
 ---
 
 ## License
 
-MIT
+MIT - See LICENSE file for details
+
+```
