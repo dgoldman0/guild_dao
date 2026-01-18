@@ -7,8 +7,8 @@ A comprehensive membership-controlled DAO with ranked governance and treasury ma
 ## 🎯 Key Features
 
 - **10-Tier Ranking System** - Exponential voting power scaling (G through SSS, 1× → 512× power)
-- **Invite-Based Onboarding** - Decentralized membership growth with 24-hour expiry and 100-day epochs
-- **Timelocked Orders** - 24-hour execution delays with veto rights for member recovery and rank management
+- **Invite-Based Onboarding** - Decentralized membership growth (F+ only) with 24-hour expiry and 100-day epochs
+- **Timelocked Orders** - 24-hour execution delays with dual veto rights (rank-based + governance override)
 - **Snapshot Voting** - Block-based voting power snapshots preventing flash loan attacks
 - **Multi-Type Treasury** - Support for ETH, ERC20, NFTs, and arbitrary contract calls
 - **Flexible Treasurers** - Both member-based (rank-dependent) and address-based (fixed limits) spending authorities
@@ -79,11 +79,24 @@ Each rank doubles the voting power of the previous rank:
 
 This exponential model ensures that higher-ranked members have meaningful influence while maintaining a reasonable distribution curve. A single SSS member has 512× the voting power of a G member but never unilateral control in a diverse DAO.
 
-### Invite Allowance (Same Exponential Model)
+### Invite Allowance (Rank-Gated Exponential Model)
 
-Each member can issue invites proportional to their voting power:
+Only members ranked **F or higher** can issue invites. The allowance doubles with each rank:
 
-**Formula:** `invitesPerEpoch(rank) = 2^rankIndex`
+| Rank | Invites per Epoch |
+|------|------------------|
+| G | 0 (cannot invite) |
+| F | 1 |
+| E | 2 |
+| D | 4 |
+| C | 8 |
+| B | 16 |
+| A | 32 |
+| S | 64 |
+| SS | 128 |
+| SSS | 256 |
+
+**Formula:** `invitesPerEpoch(rank) = 2^(rankIndex - 1)` for F+, 0 for G
 
 A 100-day epoch resets the invite counter. Invites have a fixed 24-hour expiry, allowing rejected invites to be reclaimed and reissued.
 
@@ -115,7 +128,16 @@ Voting uses **block-based voting snapshots** via OpenZeppelin `Checkpoints`:
 
 ### Invite Allowance
 
-\`inviteAllowance(rank) = 2^rankIndex\`
+Only F or higher can invite. Formula: `inviteAllowance(rank) = 2^(rankIndex - 1)` for F+, 0 for G.
+
+| Rank | Invites per Epoch |
+|------|------------------|
+| G | 0 |
+| F | 1 |
+| E | 2 |
+| D | 4 |
+| ... | ... |
+| SSS | 256 |
 
 Epoch length is fixed at **100 days**. Invite validity is fixed at **24 hours**.
 
@@ -257,16 +279,31 @@ Each member can have **at most one pending order at a time**. This prevents orde
 
 ### Veto Protection
 
+Orders can be blocked through two mechanisms:
+
+#### 1. Rank-Based Veto
+
 During the 24-hour window, higher-ranked members can veto an order if:
 
 $$\text{blockerRank} \geq \text{issuerRank} + 2$$
 
 **Example Veto Scenarios:**
 - A B-ranked member issues an order → Only A, S, SS, or SSS can veto it
-- An SSS-ranked member issues an order → No one can veto (they're already highest)
+- An SSS-ranked member issues an order → No one can veto via rank (they're already highest)
 - A G-ranked member issues an order → Any member at rank B+ can veto it
 
-This creates a natural checks-and-balance system where authority isn't completely centralized.
+#### 2. Governance Override (Democratic Veto)
+
+**Any pending order can be blocked through a governance proposal vote.** This ensures that even orders issued by SSS-ranked members can be overridden by the community if a majority votes to block it.
+
+```solidity
+createProposalBlockOrder(uint64 orderId)
+// Any F+ member can propose to block an order
+// Requires standard quorum + majority to pass
+// If passed, the order is blocked and the target is unlocked
+```
+
+This dual-protection system (rank-based + democratic) ensures that no single member has unchecked authority, while still allowing efficient day-to-day operations.
 
 ### Order Types
 
@@ -328,6 +365,9 @@ acceptPromotionGrant(uint64 orderId)
 // Veto (higher-ranked members only)
 blockOrder(uint64 orderId)
 
+// Veto via governance (any F+ member can propose)
+createProposalBlockOrder(uint64 orderId)
+
 // Execute (after veto window + delay)
 executeOrder(uint64 orderId)
 ```
@@ -345,6 +385,7 @@ The DAO can vote on:
 1. **Grant Rank** - Promote a member via democratic vote
 2. **Demote Rank** - Remove a member's rank via vote
 3. **Change Authority** - Reassign member's controlling wallet
+4. **Block Order** - Block any pending order via democratic vote
 
 ### Proposal Eligibility
 

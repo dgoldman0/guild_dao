@@ -87,8 +87,10 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function inviteAllowanceOfRank(Rank r) public pure returns (uint16) {
-        // Same doubling model as voting power.
-        return uint16(1 << _rankIndex(r));
+        // Only F or higher can invite. F=1, E=2, D=4, etc.
+        // Formula: 2^(rankIndex - 1) for F+, 0 for G
+        if (r < Rank.F) return 0;
+        return uint16(1 << (_rankIndex(r) - _rankIndex(Rank.F)));
     }
 
     function proposalLimitOfRank(Rank r) public pure returns (uint8) {
@@ -232,7 +234,8 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         ChangeQuorumBps,
         ChangeOrderDelay,
         ChangeInviteExpiry,
-        ChangeExecutionDelay
+        ChangeExecutionDelay,
+        BlockOrder  // Block a pending order via general vote
     }
 
     struct Proposal {
@@ -247,6 +250,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         Rank rankValue;
         address newAuthority;
         uint64 newParameterValue;  // for governance parameter change proposals
+        uint64 orderIdToBlock;     // for BlockOrder proposals
 
         uint32 snapshotBlock;
         uint64 startTime;
@@ -285,10 +289,12 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
 
     event OrderCreated(uint64 indexed orderId, OrderType orderType, uint32 indexed issuerId, uint32 indexed targetId, Rank newRank, address newAuthority, uint64 executeAfter);
     event OrderBlocked(uint64 indexed orderId, uint32 indexed blockerId);
+    event OrderBlockedByGovernance(uint64 indexed orderId, uint64 indexed proposalId);
     event OrderExecuted(uint64 indexed orderId);
 
     event ProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint32 indexed targetId, Rank rankValue, address newAuthority, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
     event ParameterProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint64 newValue, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
+    event BlockOrderProposalCreated(uint64 indexed proposalId, uint32 indexed proposerId, uint64 indexed orderId, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
     event VoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight);
     event ProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes);
 
@@ -925,6 +931,35 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         emit ParameterProposalCreated(proposalId, ProposalType.ChangeExecutionDelay, proposerId, newValue, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
     }
 
+    /// @notice Create a proposal to block a pending order via governance vote
+    /// @dev This allows the DAO to block any order (including those from SSS members) through democratic vote
+    /// @param orderId The ID of the pending order to block
+    /// @return proposalId The ID of the newly created proposal
+    function createProposalBlockOrder(uint64 orderId) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+
+        // Verify the order exists and is blockable
+        PendingOrder storage o = ordersById[orderId];
+        if (!o.exists) revert NoPendingAction();
+        if (o.blocked) revert OrderBlocked();
+        if (o.executed) revert OrderNotReady();
+
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalWithOrder(
+            ProposalType.BlockOrder,
+            proposerId,
+            o.targetId, // store target for reference
+            Rank.G, // unused
+            address(0), // unused
+            0, // unused
+            orderId
+        );
+
+        emit BlockOrderProposalCreated(proposalId, proposerId, orderId, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
     function _enforceProposalLimit(uint32 proposerId) internal view {
         uint8 limit = proposalLimitOfRank(membersById[proposerId].rank);
         if (limit == 0) revert RankTooLow();
@@ -938,7 +973,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         Rank rankValue,
         address newAuthority
     ) internal returns (uint64 proposalId) {
-        return _createProposalFull(pType, proposerId, targetId, rankValue, newAuthority, 0);
+        return _createProposalFull(pType, proposerId, targetId, rankValue, newAuthority, 0, 0);
     }
 
     function _createProposalFull(
@@ -948,6 +983,18 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         Rank rankValue,
         address newAuthority,
         uint64 newParameterValue
+    ) internal returns (uint64 proposalId) {
+        return _createProposalWithOrder(pType, proposerId, targetId, rankValue, newAuthority, newParameterValue, 0);
+    }
+
+    function _createProposalWithOrder(
+        ProposalType pType,
+        uint32 proposerId,
+        uint32 targetId,
+        Rank rankValue,
+        address newAuthority,
+        uint64 newParameterValue,
+        uint64 orderIdToBlock
     ) internal returns (uint64 proposalId) {
         proposalId = nextProposalId++;
 
@@ -966,6 +1013,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             rankValue: rankValue,
             newAuthority: newAuthority,
             newParameterValue: newParameterValue,
+            orderIdToBlock: orderIdToBlock,
             snapshotBlock: snap,
             startTime: start,
             endTime: end,
@@ -1046,10 +1094,27 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function _executeProposal(Proposal storage p) internal {
+        // Handle BlockOrder separately since it doesn't need a member target
+        if (p.proposalType == ProposalType.BlockOrder) {
+            _executeBlockOrderProposal(p);
+            return;
+        }
+
+        // Handle parameter change proposals (no target member)
+        if (p.proposalType == ProposalType.ChangeVotingPeriod ||
+            p.proposalType == ProposalType.ChangeQuorumBps ||
+            p.proposalType == ProposalType.ChangeOrderDelay ||
+            p.proposalType == ProposalType.ChangeInviteExpiry ||
+            p.proposalType == ProposalType.ChangeExecutionDelay) {
+            _executeParameterProposal(p);
+            return;
+        }
+
+        // Member-related proposals
         uint32 targetId = p.targetId;
         if (!membersById[targetId].exists) revert InvalidTarget();
 
-        // keep “one outstanding order” invariant: governance acts only if no pending order exists
+        // keep "one outstanding order" invariant: governance acts only if no pending order exists
         if (pendingOrderOfTarget[targetId] != 0) revert PendingActionExists();
 
         if (p.proposalType == ProposalType.GrantRank) {
@@ -1063,6 +1128,51 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             _setAuthority(targetId, p.newAuthority, p.proposerId, true);
         } else {
             revert();
+        }
+    }
+
+    function _executeBlockOrderProposal(Proposal storage p) internal {
+        uint64 orderId = p.orderIdToBlock;
+        PendingOrder storage o = ordersById[orderId];
+        
+        // Order must exist and not already be blocked/executed
+        if (!o.exists) revert NoPendingAction();
+        if (o.blocked) revert OrderBlocked();
+        if (o.executed) revert OrderNotReady();
+
+        // Block the order via governance
+        o.blocked = true;
+        o.blockedById = 0; // 0 indicates governance blocked it
+
+        // Unlock target
+        if (pendingOrderOfTarget[o.targetId] == orderId) {
+            pendingOrderOfTarget[o.targetId] = 0;
+        }
+
+        emit OrderBlockedByGovernance(orderId, p.proposalId);
+    }
+
+    function _executeParameterProposal(Proposal storage p) internal {
+        if (p.proposalType == ProposalType.ChangeVotingPeriod) {
+            uint64 oldValue = votingPeriod;
+            votingPeriod = p.newParameterValue;
+            emit VotingPeriodChanged(oldValue, p.newParameterValue, p.proposalId);
+        } else if (p.proposalType == ProposalType.ChangeQuorumBps) {
+            uint16 oldValue = quorumBps;
+            quorumBps = uint16(p.newParameterValue);
+            emit QuorumBpsChanged(oldValue, uint16(p.newParameterValue), p.proposalId);
+        } else if (p.proposalType == ProposalType.ChangeOrderDelay) {
+            uint64 oldValue = orderDelay;
+            orderDelay = p.newParameterValue;
+            emit OrderDelayChanged(oldValue, p.newParameterValue, p.proposalId);
+        } else if (p.proposalType == ProposalType.ChangeInviteExpiry) {
+            uint64 oldValue = inviteExpiry;
+            inviteExpiry = p.newParameterValue;
+            emit InviteExpiryChanged(oldValue, p.newParameterValue, p.proposalId);
+        } else if (p.proposalType == ProposalType.ChangeExecutionDelay) {
+            uint64 oldValue = executionDelay;
+            executionDelay = p.newParameterValue;
+            emit ExecutionDelayChanged(oldValue, p.newParameterValue, p.proposalId);
         }
     }
 
