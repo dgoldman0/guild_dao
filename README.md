@@ -288,9 +288,9 @@ During the 24-hour window, higher-ranked members can veto an order if:
 $$\text{blockerRank} \geq \text{issuerRank} + 2$$
 
 **Example Veto Scenarios:**
-- A B-ranked member issues an order → Only A, S, SS, or SSS can veto it
-- An SSS-ranked member issues an order → No one can veto via rank (they're already highest)
-- A G-ranked member issues an order → Any member at rank B+ can veto it
+- A B-ranked member issues an order → Only S, SS, or SSS can veto it
+- An E-ranked member issues an order → D, C, B, A, etc. can veto it
+- An SSS-ranked member issues an order → No one can veto via rank (they're already highest) except for a general vote
 
 #### 2. Governance Override (Democratic Veto)
 
