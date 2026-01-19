@@ -14,7 +14,7 @@ All notable changes to the Guild DAO system are documented in this file.
 - **Added** `onERC721Received()` function that reverts with `FundsNotAccepted` error
 - **Added** `IERC20` and `SafeERC20` imports for ERC20 transfer functionality
 
-This properly rejects NFT transfers via `safeTransferFrom()`. Note that `transferFrom()` cannot be blocked as it doesn't call `onERC721Received()`.
+This properly rejects NFT transfers via `safeTransferFrom()`. Note that `transferFrom()` cannot be blocked as it doesn't call `onERC721Received()`. Unsure of whether to add an NFT transfer by vote option as well or if it is becoming too much.
 
 #### RankedMembershipDAO: TransferERC20 Proposal Type
 
