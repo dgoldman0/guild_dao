@@ -4,6 +4,78 @@ All notable changes to the Guild DAO system are documented in this file.
 
 ## [Unreleased] - 2026-01-18
 
+### Changed
+
+#### MembershipTreasury: Unified Governance-Controlled Lock System
+
+**Replaced dual pause/lock system with single governance-controlled treasury lock:**
+
+- **Removed** OpenZeppelin `Pausable` inheritance and owner-controlled `pause()`/`unpause()` functions
+- **Renamed** `transfersLocked` → `treasuryLocked` to reflect comprehensive scope
+- **Renamed** `SetTransfersLocked` → `SetTreasuryLocked` in `ActionType` enum
+- **Renamed** `proposeSetTransfersLocked()` → `proposeSetTreasuryLocked()`
+- **Renamed** `TransfersLocked` error → `TreasuryLocked`
+- **Renamed** `TransfersLockedSet` event → `TreasuryLockedSet`
+
+**Treasury lock now halts ALL outbound activity, not just transfers:**
+
+When `treasuryLocked = true`:
+- ❌ ETH transfers (governance proposals and treasurer direct spending)
+- ❌ ERC20 transfers (governance proposals and treasurer direct spending)
+- ❌ NFT transfers (governance proposals and treasurer direct spending)
+- ❌ Call actions (governance proposals)
+- ❌ Treasurer calls (`treasurerCall()`)
+
+When `treasuryLocked = true`, the following remain active:
+- ✅ Proposal creation (to enable unlock proposals)
+- ✅ Voting on proposals
+- ✅ Proposal finalization
+- ✅ Deposits (ETH, ERC20, NFT)
+- ✅ Executing `SetTreasuryLocked` proposals (to enable unlocking)
+
+**Rationale:**
+
+The previous system had two independent pause mechanisms:
+1. Owner-controlled `Pausable` (centralized, bypasses governance)
+2. Governance-controlled `transfersLocked` (democratic but only blocked transfers)
+
+This created confusion and security concerns:
+- Owner could unilaterally pause the entire contract
+- Transfer lock didn't block `treasurerCall()` or governance Call proposals
+- An attacker with treasurer access could still execute whitelisted calls even when "locked"
+
+The new unified system:
+- **Fully governance-controlled** - no owner override
+- **Comprehensive** - blocks all outbound value movement
+- **Recoverable** - voting/finalization/proposals remain active to enable unlock
+
+### Removed
+
+- `Pausable` import from OpenZeppelin
+- `pause()` function (was owner-only)
+- `unpause()` function (was owner-only)
+- `whenNotPaused` modifier from all functions
+
+### Added
+
+- `treasuryLocked` check to `treasurerCall()` function
+- `treasuryLocked` check to governance `Call` proposal execution
+- Updated documentation comments throughout
+
+### Security Implications
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Owner pauses contract | All activity stopped | N/A (not possible) |
+| Treasury locked via governance | Only transfers blocked | All outbound blocked |
+| Treasurer calls when locked | ⚠️ Allowed | ✅ Blocked |
+| Governance Call when locked | ⚠️ Allowed | ✅ Blocked |
+| Deposits when locked | Allowed | Allowed |
+| Voting when locked | Depended on pause state | Always allowed |
+| Unlocking mechanism | Owner OR governance | Governance only |
+
+---
+
 ### Added
 
 #### Governance Override for Orders (Democratic Veto)

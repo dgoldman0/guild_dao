@@ -12,7 +12,7 @@ A comprehensive membership-controlled DAO with ranked governance and treasury ma
 - **Snapshot Voting** - Block-based voting power snapshots preventing flash loan attacks
 - **Multi-Type Treasury** - Support for ETH, ERC20, NFTs, and arbitrary contract calls
 - **Flexible Treasurers** - Both member-based (rank-dependent) and address-based (fixed limits) spending authorities
-- **Emergency Lockdown** - Governance-controlled global transfer lock for crisis scenarios
+- **Governance-Controlled Lock** - Democratic global treasury lockdown for comprehensive emergency scenarios
 - **Comprehensive Audit Trail** - Full security audit documentation with resolved findings
 
 ## System Architecture
@@ -463,7 +463,7 @@ The treasury management contract provides powerful fund controls paired with the
 | **Solidity** | `^0.8.24` |
 | **Size** | ~2,181 lines |
 | **Main Dependencies** | OpenZeppelin v5+, IRankedMembershipDAO interface |
-| **Key Libraries** | Ownable2Step, Pausable, ReentrancyGuard, SafeERC20, Checkpoints |
+| **Key Libraries** | Ownable2Step, ReentrancyGuard, SafeERC20, Checkpoints |
 
 ### Governance Parameters
 
@@ -547,7 +547,7 @@ The treasury supports multiple action types, enabling flexible governance:
 | `SetTreasurerCallsEnabled` | Enable/disable treasurer calls | All members |
 | `AddApprovedCallTarget` | Add to call whitelist | All members |
 | `RemoveApprovedCallTarget` | Remove from call whitelist | All members |
-| `SetTransfersLocked` | Globally lock all transfers (emergency) | All members |
+| `SetTreasuryLocked` | Globally lock all outbound activity (emergency) | All members |
 
 ### Proposal Timeline
 
@@ -583,7 +583,7 @@ proposeSetCallActionsEnabled(bool enabled)
 proposeSetTreasurerCallsEnabled(bool enabled)
 proposeAddApprovedCallTarget(address target)
 proposeRemoveApprovedCallTarget(address target)
-proposeSetTransfersLocked(bool locked)
+proposeSetTreasuryLocked(bool locked)
 
 // Treasurer management
 proposeAddMemberTreasurer(uint32 memberId, ...)
@@ -845,43 +845,72 @@ proposeTransferNFT(
 
 ---
 
-## 🚨 Emergency Control: Global Transfer Lock
+## 🚨 Emergency Control: Global Treasury Lock
 
-The DAO can vote to globally freeze all transfers in emergency situations.
+The DAO can vote to globally freeze all treasury outbound activity in emergency situations.
 
 ### How It Works
 
+When `treasuryLocked = true`, the following actions are blocked:
+- All ETH transfers (governance proposals and treasurer direct spending)
+- All ERC20 transfers (governance proposals and treasurer direct spending)
+- All NFT transfers (governance proposals)
+- All Call actions (governance proposals and treasurer calls)
+
 ```solidity
-// Proposal to lock transfers
-proposeSetTransfersLocked(bool locked)
+// Proposal to lock the treasury
+proposeSetTreasuryLocked(bool locked)
 // Requires vote and execution delay
 
-// Blocks all:
-treasurerSpendETH()
-treasurerSpendERC20()
-treasurerTransferNFT()
-execute(TransferETH)
-execute(TransferERC20)
-execute(TransferNFT)
+// When locked, these are blocked:
+treasurerSpendETH()           ❌
+treasurerSpendERC20()         ❌
+treasurerTransferNFT()        ❌
+treasurerCall()               ❌
+execute(TransferETH)          ❌
+execute(TransferERC20)        ❌
+execute(TransferNFT)          ❌
+execute(Call)                 ❌
+
+// But these remain active to enable recovery:
+castVote()                    ✅
+finalize()                    ✅
+proposeSetTreasuryLocked(false)   ✅  // Unlock via new proposal
+depositETH()                  ✅
+depositERC20()                ✅
+depositNFT()                  ✅
 ```
 
 **Use Cases:**
 - Security incident detection
 - Bridge/smart contract vulnerability
+- Malicious treasurer detection
 - Emergency fund preservation during governance crisis
+- Protocol upgrade coordination
+
+### Key Design Decisions
+
+1. **Fully governance-controlled** - No owner override. Lock can only be set via democratic vote.
+2. **Comprehensive scope** - Blocks ALL outbound value movement, not just transfers.
+3. **Recoverable** - Voting and proposal creation remain active to enable unlocking.
+4. **Transparent** - All treasury lock changes emit `TreasuryLockedSet` events.
 
 ---
 
 ## ⚙️ Configuration & Security
 
-### Owner Functions
+### Governance Parameters
 
-| Function | Effect |
-|----------|--------|
-| `pause()` | Freeze all operations (emergency) |
-| `unpause()` | Resume operations |
+All treasury parameters are set via governance proposals (no owner override):
 
-**Note:** Most treasury settings are now controlled via governance proposals, not owner functions, to ensure democratic control.
+| Parameter | Control | Purpose |
+|-----------|---------|----------|
+| `votingPeriod` | Governance | Duration of voting windows |
+| `quorumBps` | Governance | Minimum voting participation required |
+| `executionDelay` | Governance | Timelock after proposal passes |
+| `callActionsEnabled` | Governance | Enable/disable arbitrary Call actions |
+| `treasurerCallsEnabled` | Governance | Enable/disable treasurer direct calls |
+| `treasuryLocked` | Governance | Global lockdown of outbound activity |
 
 ### Security Layers
 
@@ -894,8 +923,8 @@ The treasury implements multiple security layers:
 5. **Call Whitelist** - Treasurer calls limited to approved targets
 6. **Snapshot Voting** - Voting power locked at block height (no flash loans)
 7. **ReentrancyGuard** - Protection against reentrancy attacks
-8. **Pausable** - Emergency stop for all operations
-9. **Transfer Lock** - Governance-controlled global spending freeze
+8. **Global Treasury Lock** - Comprehensive governance-controlled emergency freeze
+9. **Deposit-Only Mode** - When locked, deposits remain active to enable recovery
 
 ---
 
@@ -922,7 +951,7 @@ The treasury implements multiple security layers:
 - `TreasurerCallsEnabledSet(bool enabled)`
 - `ApprovedCallTargetAdded(address indexed target)`
 - `ApprovedCallTargetRemoved(address indexed target)`
-- `TransfersLockedSet(bool locked)`
+- `TreasuryLockedSet(bool locked)`
 - `NFTTransferred(address indexed nftContract, address indexed to, uint256 tokenId)`
 
 ---
@@ -1111,7 +1140,7 @@ proposeTransferNFT(address nftContract, address to, uint256 tokenId)
 proposeCall(address target, uint256 value, bytes calldata data)
 
 // Settings
-proposeSetTransfersLocked(bool locked)               // Emergency freeze
+proposeSetTreasuryLocked(bool locked)               // Emergency freeze
 ```
 
 **Treasurer Management:**

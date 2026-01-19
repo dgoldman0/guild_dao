@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -40,7 +39,7 @@ interface IRankedMembershipDAO {
     function executionDelay() external view returns (uint64);
 }
 
-contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
+contract MembershipTreasury is Ownable2Step, ReentrancyGuard {
     using SafeCast for uint256;
     using SafeERC20 for IERC20;
 
@@ -82,8 +81,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         SetTreasurerCallsEnabled,
         AddApprovedCallTarget,
         RemoveApprovedCallTarget,
-        // Global transfer lock
-        SetTransfersLocked
+        // Global treasury lock (halts all outbound activity except voting)
+        SetTreasuryLocked
     }
 
     struct Action {
@@ -285,8 +284,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // Whitelist of approved contract targets for treasurer calls AND governance Call proposals
     mapping(address => bool) public approvedCallTargets;
 
-    // Global transfer lock - when true, all transfers out are blocked
-    bool public transfersLocked = false;
+    // Global treasury lock - when true, all outbound activity (transfers, calls) is blocked
+    // Only voting and proposal creation remain active to allow unlocking via governance
+    bool public treasuryLocked = false;
 
     // Voting delay after proposal creation (prevents flash governance attacks)
     uint64 public constant VOTING_DELAY = 1;
@@ -329,7 +329,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     error ZeroAmount();
     error NFTNotOwned();
     error SpendingLimitTooHigh();
-    error TransfersLocked();
+    error TreasuryLocked();
     error VotingNotStarted();
     error InsufficientVotes();
 
@@ -442,7 +442,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     event TreasurerCallsEnabledSet(bool enabled);
     event ApprovedCallTargetAdded(address indexed target);
     event ApprovedCallTargetRemoved(address indexed target);
-    event TransfersLockedSet(bool locked);
+    event TreasuryLockedSet(bool locked);
 
     // Treasurer call event
     event TreasurerCallExecuted(
@@ -470,7 +470,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         emit DepositedETH(msg.sender, msg.value);
     }
 
-    function depositERC20(address token, uint256 amount) external whenNotPaused nonReentrant {
+    function depositERC20(address token, uint256 amount) external nonReentrant {
         if (token == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -478,7 +478,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @notice Deposit an NFT to the treasury
-    function depositNFT(address nftContract, uint256 tokenId) external whenNotPaused nonReentrant {
+    function depositNFT(address nftContract, uint256 tokenId) external nonReentrant {
         if (nftContract == address(0)) revert InvalidAddress();
         IERC721(nftContract).transferFrom(msg.sender, address(this), tokenId);
         emit DepositedNFT(nftContract, msg.sender, tokenId);
@@ -496,11 +496,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     // ----------------------------
-    // Admin safety
+    // Admin safety (caps only - treasury lock is governance-controlled)
     // ----------------------------
-
-    function pause() external onlyOwner { _pause(); }
-    function unpause() external onlyOwner { _unpause(); }
 
     function setCapsEnabled(bool enabled) external onlyOwner {
         capsEnabled = enabled;
@@ -518,8 +515,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // ----------------------------
 
     /// @notice Treasurer spends ETH directly (no proposal needed)
-    function treasurerSpendETH(address to, uint256 amount) external whenNotPaused nonReentrant {
-        if (transfersLocked) revert TransfersLocked();
+    function treasurerSpendETH(address to, uint256 amount) external nonReentrant {
+        if (treasuryLocked) revert TreasuryLocked();
         if (to == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
 
@@ -535,8 +532,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @notice Treasurer spends ERC20 directly (no proposal needed)
-    function treasurerSpendERC20(address token, address to, uint256 amount) external whenNotPaused nonReentrant {
-        if (transfersLocked) revert TransfersLocked();
+    function treasurerSpendERC20(address token, address to, uint256 amount) external nonReentrant {
+        if (treasuryLocked) revert TreasuryLocked();
         if (token == address(0) || to == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
 
@@ -551,8 +548,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @notice Treasurer transfers an NFT directly (if authorized for that collection)
-    function treasurerTransferNFT(address nftContract, address to, uint256 tokenId) external whenNotPaused nonReentrant {
-        if (transfersLocked) revert TransfersLocked();
+    function treasurerTransferNFT(address nftContract, address to, uint256 tokenId) external nonReentrant {
+        if (treasuryLocked) revert TreasuryLocked();
         if (nftContract == address(0) || to == address(0)) revert InvalidAddress();
 
         // Verify treasury owns the NFT before attempting transfer (M-07)
@@ -577,7 +574,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @param target The contract to call (must be in approved whitelist)
     /// @param value ETH value to send with the call (counted against spending limit)
     /// @param data The calldata to execute
-    function treasurerCall(address target, uint256 value, bytes calldata data) external whenNotPaused nonReentrant {
+    function treasurerCall(address target, uint256 value, bytes calldata data) external nonReentrant {
+        if (treasuryLocked) revert TreasuryLocked();
         if (target == address(0)) revert InvalidAddress();
         if (!treasurerCallsEnabled) revert TreasurerCallsDisabled();
         if (!approvedCallTargets[target]) revert CallTargetNotApproved();
@@ -786,20 +784,19 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
             TreasurerSpending storage spending = addressTreasurerSpending[spender];
             periodStart = spending.periodStart;
 
-            // Reset period if expired (H-02 FIX: properly handle period reset)
-            bool periodExpired = currentTime >= periodStart + periodDuration;
-            if (periodExpired) {
+            // Reset period if expired
+            if (currentTime >= periodStart + periodDuration) {
                 spending.periodStart = currentTime;
                 spending.spentInPeriod = 0;
-                // Note: Token spending is tracked per-token but shares the same period
-            }
-            
-            // Get spent amount for this asset
-            if (token == address(0)) {
-                spentInPeriod = periodExpired ? 0 : spending.spentInPeriod;
+                // Reset token spending too
+                addressTreasurerTokenSpent[spender][token] = 0;
+                spentInPeriod = 0;
             } else {
-                // For tokens, check if period expired to handle cross-asset spending
-                spentInPeriod = periodExpired ? 0 : addressTreasurerTokenSpent[spender][token];
+                if (token == address(0)) {
+                    spentInPeriod = spending.spentInPeriod;
+                } else {
+                    spentInPeriod = addressTreasurerTokenSpent[spender][token];
+                }
             }
 
             // Check limit
@@ -934,7 +931,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     function proposeTransferETH(address to, uint256 amount)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -976,7 +972,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     function proposeTransferERC20(address token, address to, uint256 amount)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1017,7 +1012,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
     function proposeCall(address target, uint256 value, bytes calldata data)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1067,7 +1061,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 spendingLimitPerRankPower,
         uint64 periodDuration,
         IRankedMembershipDAO.Rank minRank
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (periodDuration == 0) revert InvalidPeriodDuration();
         
         // Verify member exists
@@ -1105,7 +1099,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 spendingLimitPerRankPower,
         uint64 periodDuration,
         IRankedMembershipDAO.Rank minRank
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (periodDuration == 0) revert InvalidPeriodDuration();
         if (!memberTreasurers[memberId].active) revert TreasurerNotActive();
 
@@ -1135,7 +1129,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose removing a member-based treasurer
     function proposeRemoveMemberTreasurer(uint32 memberId)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1164,7 +1157,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         address token,
         uint256 baseLimit,
         uint256 limitPerRankPower
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (!memberTreasurers[memberId].active) revert TreasurerNotActive();
         if (token == address(0)) revert InvalidAddress();
 
@@ -1195,7 +1188,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         address treasurer,
         uint256 baseSpendingLimit,
         uint64 periodDuration
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (treasurer == address(0)) revert InvalidAddress();
         if (periodDuration == 0) revert InvalidPeriodDuration();
         if (addressTreasurers[treasurer].active) revert TreasurerAlreadyExists();
@@ -1226,7 +1219,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         address treasurer,
         uint256 baseSpendingLimit,
         uint64 periodDuration
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (periodDuration == 0) revert InvalidPeriodDuration();
         if (!addressTreasurers[treasurer].active) revert TreasurerNotActive();
 
@@ -1254,7 +1247,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose removing an address-based treasurer
     function proposeRemoveAddressTreasurer(address treasurer)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1282,7 +1274,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         address treasurer,
         address token,
         uint256 limit
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (!addressTreasurers[treasurer].active) revert TreasurerNotActive();
         if (token == address(0)) revert InvalidAddress();
 
@@ -1314,7 +1306,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose transferring an NFT from the treasury
     function proposeTransferNFT(address nftContract, address to, uint256 tokenId)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1353,7 +1344,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         uint64 transfersPerPeriod,
         uint64 periodDuration,
         IRankedMembershipDAO.Rank minRank
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (nftContract == address(0)) revert InvalidAddress();
         
         // Verify member exists
@@ -1387,7 +1378,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose revoking NFT access from a member-based treasurer
     function proposeRevokeMemberNFTAccess(uint32 memberId, address nftContract)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1421,7 +1411,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         address nftContract,
         uint64 transfersPerPeriod,
         uint64 periodDuration
-    ) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+    ) external nonReentrant returns (uint64 proposalId) {
         if (treasurer == address(0) || nftContract == address(0)) revert InvalidAddress();
         if (addressNFTAccess[treasurer][nftContract].hasAccess) revert NFTAccessAlreadyGranted();
 
@@ -1450,7 +1440,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose revoking NFT access from an address-based treasurer
     function proposeRevokeAddressNFTAccess(address treasurer, address nftContract)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1485,7 +1474,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose enabling/disabling arbitrary Call actions for proposals
     function proposeSetCallActionsEnabled(bool enabled)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1509,7 +1497,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose enabling/disabling treasurer Call functionality
     function proposeSetTreasurerCallsEnabled(bool enabled)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1533,7 +1520,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose adding a contract to the approved call targets whitelist
     function proposeAddApprovedCallTarget(address target)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1560,7 +1546,6 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Propose removing a contract from the approved call targets whitelist
     function proposeRemoveApprovedCallTarget(address target)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1584,11 +1569,11 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         );
     }
 
-    /// @notice Propose enabling/disabling the global transfer lock
-    /// @dev When locked, all transfers out (ETH, ERC20, NFT) are blocked
-    function proposeSetTransfersLocked(bool locked)
+    /// @notice Propose enabling/disabling the global treasury lock
+    /// @dev When locked, all outbound activity (transfers and calls) is blocked.
+    ///      Voting, finalization, and proposal creation remain active to allow unlocking.
+    function proposeSetTreasuryLocked(bool locked)
         external
-        whenNotPaused
         nonReentrant
         returns (uint64 proposalId)
     {
@@ -1601,7 +1586,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         proposalId = _createTreasurerProposal(
             proposerId,
             rank,
-            ActionType.SetTransfersLocked,
+            ActionType.SetTreasuryLocked,
             address(0),
             address(0),
             locked ? 1 : 0,
@@ -1650,7 +1635,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // Voting
     // ----------------------------
 
-    function castVote(uint64 proposalId, bool support) external whenNotPaused nonReentrant {
+    function castVote(uint64 proposalId, bool support) external nonReentrant {
         Proposal storage p = proposals[proposalId];
         if (!p.exists) revert ProposalNotFound();
         if (p.finalized) revert ProposalAlreadyFinalized();
@@ -1675,7 +1660,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // Finalize + Execute
     // ----------------------------
 
-    function finalize(uint64 proposalId) external whenNotPaused nonReentrant {
+    function finalize(uint64 proposalId) external nonReentrant {
         Proposal storage p = proposals[proposalId];
         if (!p.exists) revert ProposalNotFound();
         if (p.finalized) revert ProposalAlreadyFinalized();
@@ -1717,7 +1702,7 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         emit TreasuryProposalFinalized(proposalId, true, p.yesVotes, p.noVotes, p.executableAfter);
     }
 
-    function execute(uint64 proposalId) external whenNotPaused nonReentrant {
+    function execute(uint64 proposalId) external nonReentrant {
         Proposal storage p = proposals[proposalId];
         if (!p.exists) revert ProposalNotFound();
         if (!p.finalized || !p.succeeded) revert NotReady();
@@ -1734,15 +1719,17 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         p.executed = true;
 
         if (p.action.actionType == ActionType.TransferETH) {
-            // Check global transfer lock for ETH transfers
-            if (transfersLocked) revert TransfersLocked();
+            // Check global treasury lock for ETH transfers
+            if (treasuryLocked) revert TreasuryLocked();
             (bool ok,) = p.action.target.call{value: p.action.value}("");
             if (!ok) revert ExecutionFailed();
         } else if (p.action.actionType == ActionType.TransferERC20) {
-            // Check global transfer lock for ERC20 transfers
-            if (transfersLocked) revert TransfersLocked();
+            // Check global treasury lock for ERC20 transfers
+            if (treasuryLocked) revert TreasuryLocked();
             IERC20(p.action.token).safeTransfer(p.action.target, p.action.value);
         } else if (p.action.actionType == ActionType.Call) {
+            // Check global treasury lock for Call actions
+            if (treasuryLocked) revert TreasuryLocked();
             // Note: callActionsEnabled can change between proposal creation and execution.
             // This is intentional - governance can disable dangerous features for pending proposals.
             if (!callActionsEnabled) revert ActionDisabled();
@@ -1784,8 +1771,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
             _executeAddApprovedCallTarget(p.action.data);
         } else if (p.action.actionType == ActionType.RemoveApprovedCallTarget) {
             _executeRemoveApprovedCallTarget(p.action.data);
-        } else if (p.action.actionType == ActionType.SetTransfersLocked) {
-            _executeSetTransfersLocked(p.action.data);
+        } else if (p.action.actionType == ActionType.SetTreasuryLocked) {
+            _executeSetTreasuryLocked(p.action.data);
         } else {
             revert ExecutionFailed();
         }
@@ -1941,8 +1928,8 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
     // ----------------------------
 
     function _executeTransferNFT(bytes memory data) internal {
-        // Check global transfer lock for NFT transfers
-        if (transfersLocked) revert TransfersLocked();
+        // Check global treasury lock for NFT transfers
+        if (treasuryLocked) revert TreasuryLocked();
         
         NFTTransferParams memory params = abi.decode(data, (NFTTransferParams));
         
@@ -2172,9 +2159,9 @@ contract MembershipTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         emit ApprovedCallTargetRemoved(target);
     }
 
-    function _executeSetTransfersLocked(bytes memory data) internal {
+    function _executeSetTreasuryLocked(bytes memory data) internal {
         bool locked = abi.decode(data, (bool));
-        transfersLocked = locked;
-        emit TransfersLockedSet(locked);
+        treasuryLocked = locked;
+        emit TreasuryLockedSet(locked);
     }
 }
