@@ -4,6 +4,26 @@ All notable changes to the Guild DAO system are documented in this file.
 
 ## [Unreleased] - 2026-01-18
 
+### Added
+
+#### RankedMembershipDAO: Fund Rejection Protection
+
+**Added automatic rejection of accidental fund transfers:**
+
+- **Added** `receive()` function to reject direct ETH transfers
+- **Added** `fallback()` function to reject token transfers and other calls
+- **Added** `FundsNotAccepted` error for clear rejection messaging
+- **Added** documentation in README.md explaining the fund rejection design
+
+**Rationale:**
+
+RankedMembershipDAO is exclusively for membership and governance operations. The separate `MembershipTreasury` contract handles all fund management. This design provides:
+- **Safety** - Prevents accidental loss of funds due to misconfigured transfers
+- **Clarity** - Clear separation of concerns between governance and treasury
+- **Security** - Eliminates unintended state changes from token callbacks
+
+Any ETH sent directly to the contract is rejected. Any ERC20 or NFT transfer attempts (via standard transfer functions) are rejected by the fallback handler.
+
 ### Changed
 
 #### MembershipTreasury: Unified Governance-Controlled Lock System

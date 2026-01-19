@@ -135,6 +135,7 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     error BootstrapAlreadyFinalized();
     error InvalidParameterValue();
     error ParameterOutOfBounds();
+    error FundsNotAccepted();
 
     // ----------------------------
     // Membership
@@ -1198,5 +1199,21 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
 
     function getProposal(uint64 proposalId) external view returns (Proposal memory) {
         return proposalsById[proposalId];
+    }
+
+    // ----------------------------
+    // Fund Rejection (No ETH, ERC20, or NFT Acceptance)
+    // ----------------------------
+    // This contract is NOT a recipient of funds. Any accidental ETH transfers,
+    // ERC20 deposits, or NFT transfers are rejected to prevent fund loss.
+
+    /// @notice Rejects any ETH transfers sent directly to this contract.
+    receive() external payable {
+        revert FundsNotAccepted();
+    }
+
+    /// @notice Rejects any calls to undefined functions (including ERC20/NFT transfers via fallback).
+    fallback() external payable {
+        revert FundsNotAccepted();
     }
 }

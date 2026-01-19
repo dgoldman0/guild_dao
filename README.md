@@ -432,6 +432,17 @@ finalize(uint64 proposalId)
 execute(uint64 proposalId)
 ```
 
+### Important Security Note: Fund Rejection
+
+⚠️ **The RankedMembershipDAO contract is NOT designed to receive or hold funds.** Any accidental transfers of ETH, ERC20 tokens, or NFTs to this contract will be **automatically rejected and reverted**.
+
+This design decision prevents:
+- Accidental loss of funds due to misconfigured transfers
+- Confusion between governance operations and treasury operations
+- Unintended state changes from token callbacks
+
+**Treasury operations** must use the dedicated `MembershipTreasury` contract instead.
+
 ---
 
 # 💰 MembershipTreasury Contract
@@ -445,9 +456,7 @@ The treasury management contract provides powerful fund controls paired with the
 - **Flexible treasury roles** - Member-based and address-based treasurers
 
 
-# 💰 MembershipTreasury Contract
 
-The treasury management contract provides powerful fund controls paired with the RankedMembershipDAO membership system. It enables:
 
 - **Democratic spending** - Members vote on large transactions
 - **Delegated spending** - Treasurers handle routine fund management
