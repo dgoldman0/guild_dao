@@ -6,4 +6,4 @@
 
 4. Add setting to TreasuryDAO that determines whether the DAO is general or rank specific (if rank specific do flat voting and only allow members of that rank to vote or maybe greater than or equal to and multiplier voting, not sure).
 
-5. Add explicit voting to allow changing the assigned ranked DAO that controls the treasury. Technically can be set directly by call if enabled but...
+5. Add explicit voting to allow changing the assigned ranked DAO that controls the treasury. Cannot be changed as of now because it's set to immutable. Removing that keyword would allow a global call vote. 
