@@ -23,10 +23,14 @@ import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
+contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard, IERC721Receiver {
     using SafeCast for uint256;
     using Checkpoints for Checkpoints.Trace224;
+    using SafeERC20 for IERC20;
 
     // ----------------------------
     // Constants (immutable limits for safeguards)
@@ -236,7 +240,8 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         ChangeOrderDelay,
         ChangeInviteExpiry,
         ChangeExecutionDelay,
-        BlockOrder  // Block a pending order via general vote
+        BlockOrder,  // Block a pending order via general vote
+        TransferERC20  // Transfer accidental ERC20 deposits
     }
 
     struct Proposal {
@@ -252,6 +257,9 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         address newAuthority;
         uint64 newParameterValue;  // for governance parameter change proposals
         uint64 orderIdToBlock;     // for BlockOrder proposals
+        address erc20Token;        // for TransferERC20 proposals
+        uint256 erc20Amount;       // for TransferERC20 proposals
+        address erc20Recipient;    // for TransferERC20 proposals
 
         uint32 snapshotBlock;
         uint64 startTime;
@@ -296,6 +304,8 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     event ProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint32 indexed targetId, Rank rankValue, address newAuthority, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
     event ParameterProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint64 newValue, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
     event BlockOrderProposalCreated(uint64 indexed proposalId, uint32 indexed proposerId, uint64 indexed orderId, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
+    event TransferERC20ProposalCreated(uint64 indexed proposalId, uint32 indexed proposerId, address indexed token, uint256 amount, address recipient, uint64 startTime, uint64 endTime, uint32 snapshotBlock);
+    event ERC20Transferred(uint64 indexed proposalId, address indexed token, address indexed recipient, uint256 amount);
     event VoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight);
     event ProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes);
 
@@ -961,6 +971,38 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         emit BlockOrderProposalCreated(proposalId, proposerId, orderId, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
     }
 
+    /// @notice Create a proposal to transfer accidentally deposited ERC20 tokens
+    /// @dev This allows the DAO to recover ERC20 tokens that were sent to this contract by mistake.
+    ///      Unlike ETH and NFTs which can be rejected, ERC20 transfers via `transfer()` cannot be blocked.
+    /// @param token The ERC20 token contract address
+    /// @param amount The amount of tokens to transfer
+    /// @param recipient The address to receive the recovered tokens
+    /// @return proposalId The ID of the newly created proposal
+    function createProposalTransferERC20(address token, uint256 amount, address recipient) external whenNotPaused nonReentrant returns (uint64 proposalId) {
+        _requireValidAddress(token);
+        _requireValidAddress(recipient);
+        if (amount == 0) revert InvalidParameterValue();
+
+        uint32 proposerId = _requireMemberAuthority(msg.sender);
+        if (membersById[proposerId].rank < Rank.F) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposalComplete(
+            ProposalType.TransferERC20,
+            proposerId,
+            0, // no target member
+            Rank.G, // unused
+            address(0), // unused
+            0, // unused
+            0, // unused
+            token,
+            amount,
+            recipient
+        );
+
+        emit TransferERC20ProposalCreated(proposalId, proposerId, token, amount, recipient, uint64(block.timestamp), uint64(block.timestamp) + votingPeriod, block.number.toUint32());
+    }
+
     function _enforceProposalLimit(uint32 proposerId) internal view {
         uint8 limit = proposalLimitOfRank(membersById[proposerId].rank);
         if (limit == 0) revert RankTooLow();
@@ -997,6 +1039,21 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         uint64 newParameterValue,
         uint64 orderIdToBlock
     ) internal returns (uint64 proposalId) {
+        return _createProposalComplete(pType, proposerId, targetId, rankValue, newAuthority, newParameterValue, orderIdToBlock, address(0), 0, address(0));
+    }
+
+    function _createProposalComplete(
+        ProposalType pType,
+        uint32 proposerId,
+        uint32 targetId,
+        Rank rankValue,
+        address newAuthority,
+        uint64 newParameterValue,
+        uint64 orderIdToBlock,
+        address erc20Token,
+        uint256 erc20Amount,
+        address erc20Recipient
+    ) internal returns (uint64 proposalId) {
         proposalId = nextProposalId++;
 
         uint64 start = uint64(block.timestamp);
@@ -1015,6 +1072,9 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             newAuthority: newAuthority,
             newParameterValue: newParameterValue,
             orderIdToBlock: orderIdToBlock,
+            erc20Token: erc20Token,
+            erc20Amount: erc20Amount,
+            erc20Recipient: erc20Recipient,
             snapshotBlock: snap,
             startTime: start,
             endTime: end,
@@ -1101,6 +1161,12 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
             return;
         }
 
+        // Handle TransferERC20 proposals (recovery of accidental deposits)
+        if (p.proposalType == ProposalType.TransferERC20) {
+            _executeTransferERC20Proposal(p);
+            return;
+        }
+
         // Handle parameter change proposals (no target member)
         if (p.proposalType == ProposalType.ChangeVotingPeriod ||
             p.proposalType == ProposalType.ChangeQuorumBps ||
@@ -1153,6 +1219,17 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
         emit OrderBlockedByGovernance(orderId, p.proposalId);
     }
 
+    function _executeTransferERC20Proposal(Proposal storage p) internal {
+        address token = p.erc20Token;
+        uint256 amount = p.erc20Amount;
+        address recipient = p.erc20Recipient;
+
+        // Transfer the ERC20 tokens using SafeERC20
+        IERC20(token).safeTransfer(recipient, amount);
+
+        emit ERC20Transferred(p.proposalId, token, recipient, amount);
+    }
+
     function _executeParameterProposal(Proposal storage p) internal {
         if (p.proposalType == ProposalType.ChangeVotingPeriod) {
             uint64 oldValue = votingPeriod;
@@ -1202,17 +1279,30 @@ contract RankedMembershipDAO is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     // ----------------------------
-    // Fund Rejection (No ETH, ERC20, or NFT Acceptance)
+    // Fund Rejection & ERC-721 Receiver
     // ----------------------------
-    // This contract is NOT a recipient of funds. Any accidental ETH transfers,
-    // ERC20 deposits, or NFT transfers are rejected to prevent fund loss.
+    // This contract is NOT a recipient of funds. ETH transfers are rejected via receive().
+    // NFT transfers via safeTransferFrom are rejected by returning an invalid selector.
+    // ERC20 transfers via transfer() CANNOT be blocked - use TransferERC20 proposals to recover.
 
     /// @notice Rejects any ETH transfers sent directly to this contract.
     receive() external payable {
         revert FundsNotAccepted();
     }
 
-    /// @notice Rejects any calls to undefined functions (including ERC20/NFT transfers via fallback).
+    /// @notice Implements IERC721Receiver to reject NFT transfers via safeTransferFrom.
+    /// @dev Returns an invalid selector to cause the safeTransferFrom to revert.
+    ///      Note: Direct transferFrom() calls cannot be blocked as they don't call this function.
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure override returns (bytes4) {
+        revert FundsNotAccepted();
+    }
+
+    /// @notice Rejects any calls to undefined functions.
     fallback() external payable {
         revert FundsNotAccepted();
     }

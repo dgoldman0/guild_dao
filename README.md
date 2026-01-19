@@ -386,6 +386,7 @@ The DAO can vote on:
 2. **Demote Rank** - Remove a member's rank via vote
 3. **Change Authority** - Reassign member's controlling wallet
 4. **Block Order** - Block any pending order via democratic vote
+5. **Transfer ERC20** - Recover accidentally deposited ERC20 tokens
 
 ### Proposal Eligibility
 
@@ -423,6 +424,7 @@ Day 8+: Ready to Execute
 proposeGrantRank(uint32 targetId, Rank newRank)
 proposeDemoteRank(uint32 targetId, Rank newRank)
 proposeChangeAuthority(uint32 targetId, address newAuthority)
+createProposalTransferERC20(address token, uint256 amount, address recipient)
 
 // Vote
 castVote(uint64 proposalId, bool support)
@@ -434,12 +436,25 @@ execute(uint64 proposalId)
 
 ### Important Security Note: Fund Rejection
 
-⚠️ **The RankedMembershipDAO contract is NOT designed to receive or hold funds.** Any accidental transfers of ETH, ERC20 tokens, or NFTs to this contract will be **automatically rejected and reverted**.
+⚠️ **The RankedMembershipDAO contract is NOT designed to receive or hold funds.** The contract implements multiple protections against accidental deposits:
 
-This design decision prevents:
-- Accidental loss of funds due to misconfigured transfers
-- Confusion between governance operations and treasury operations
-- Unintended state changes from token callbacks
+| Asset Type | Protection | Recovery Method |
+|------------|------------|------------------|
+| **ETH** | `receive()` reverts | N/A (blocked) |
+| **NFTs via safeTransferFrom** | `onERC721Received()` reverts | N/A (blocked) |
+| **NFTs via transferFrom** | ⚠️ Cannot be blocked | Manual recovery required |
+| **ERC20 tokens** | ⚠️ Cannot be blocked | `TransferERC20` proposal |
+
+**Why ERC20 transfers cannot be blocked:**
+
+ERC20 tokens use a simple balance-update pattern where `transfer(to, amount)` directly updates the sender's and recipient's balances without calling any function on the recipient. Unlike ETH (which triggers `receive()`) or NFTs via `safeTransferFrom` (which triggers `onERC721Received()`), there is no callback mechanism to reject the transfer.
+
+**Recovery Process for Accidental ERC20 Deposits:**
+
+1. Any F+ member calls `createProposalTransferERC20(token, amount, recipient)`
+2. Standard voting period applies (7 days by default)
+3. If quorum is met and majority votes yes, the tokens are transferred
+4. `ERC20Transferred(proposalId, token, recipient, amount)` event is emitted
 
 **Treasury operations** must use the dedicated `MembershipTreasury` contract instead.
 

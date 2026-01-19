@@ -2,7 +2,58 @@
 
 All notable changes to the Guild DAO system are documented in this file.
 
-## [Unreleased] - 2026-01-18
+## [Unreleased] - 2026-01-19
+
+### Added
+
+#### RankedMembershipDAO: Proper ERC-721 Rejection
+
+**Added explicit ERC-721 transfer rejection via `IERC721Receiver` implementation:**
+
+- **Added** `IERC721Receiver` interface import and implementation
+- **Added** `onERC721Received()` function that reverts with `FundsNotAccepted` error
+- **Added** `IERC20` and `SafeERC20` imports for ERC20 transfer functionality
+
+This properly rejects NFT transfers via `safeTransferFrom()`. Note that `transferFrom()` cannot be blocked as it doesn't call `onERC721Received()`.
+
+#### RankedMembershipDAO: TransferERC20 Proposal Type
+
+**Added governance proposal type for recovering accidentally deposited ERC20 tokens:**
+
+- **Added** `TransferERC20` to the `ProposalType` enum
+- **Added** `erc20Token`, `erc20Amount`, and `erc20Recipient` fields to `Proposal` struct
+- **Added** `createProposalTransferERC20(address token, uint256 amount, address recipient)` function
+- **Added** `_executeTransferERC20Proposal()` internal function
+- **Added** `_createProposalComplete()` internal function to support all proposal fields
+- **Added** `TransferERC20ProposalCreated` event
+- **Added** `ERC20Transferred` event
+
+**Rationale:**
+
+Unlike ETH (blocked by `receive()`) and NFTs via safeTransferFrom (blocked by `onERC721Received()`), ERC20 token transfers via `transfer()` cannot be blocked because they don't trigger any callback on the recipient. This proposal type allows the DAO to democratically vote to recover any accidentally deposited ERC20 tokens.
+
+**Recovery Flow:**
+1. F+ member creates proposal with `createProposalTransferERC20(token, amount, recipient)`
+2. Standard voting period (7 days default)
+3. If quorum + majority achieved, tokens are transferred via SafeERC20
+4. `ERC20Transferred` event emitted
+
+### Changed
+
+#### RankedMembershipDAO: Updated Fund Rejection Documentation
+
+**Clarified what can and cannot be blocked:**
+
+| Asset Type | Can Block? | Mechanism |
+|------------|------------|-----------|
+| ETH | ✅ Yes | `receive()` reverts |
+| NFTs via safeTransferFrom | ✅ Yes | `onERC721Received()` reverts |
+| NFTs via transferFrom | ❌ No | No callback to intercept |
+| ERC20 tokens | ❌ No | No callback to intercept |
+
+---
+
+## [Previous] - 2026-01-18
 
 ### Added
 
