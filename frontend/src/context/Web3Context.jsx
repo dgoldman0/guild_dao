@@ -3,6 +3,7 @@ import { BrowserProvider, Contract } from "ethers";
 import { DAO_ABI, GOVERNANCE_ABI, TREASURY_ABI, FEE_ROUTER_ABI } from "../contracts/abis";
 import { getAddresses } from "../contracts/config";
 import { EPOCH_SECONDS } from "../lib/constants";
+import { decodeContractError } from "../lib/errors";
 
 const Web3Ctx = createContext(null);
 
@@ -51,9 +52,13 @@ export function Web3Provider({ children }) {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const showToast = useCallback((msg, type = "info") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 4000);
+  const showToast = useCallback((msg, type = "info", extra = null) => {
+    setToast({ msg, type, ...extra });
+    // errors stay longer, can also be dismissed manually
+    const delay = type === "error" ? 10000 : 4000;
+    const timer = setTimeout(() => setToast(null), delay);
+    // store dismiss fn so the toast can be closed early
+    setToast((prev) => prev ? { ...prev, dismiss: () => { clearTimeout(timer); setToast(null); } } : null);
   }, []);
 
   // ── Connect wallet ───────────────────────────
@@ -217,10 +222,15 @@ export function Web3Provider({ children }) {
         await refresh();
         return tx;
       } catch (e) {
-        const reason =
-          e?.reason || e?.revert?.args?.[0] || e?.message?.slice(0, 120) || "Unknown error";
-        showToast(`${label} failed: ${reason}`, "error");
-        throw e;
+        const decoded = decodeContractError(e);
+        showToast(`${label} failed`, "error", {
+          errorTitle: decoded.title,
+          errorHint: decoded.hint,
+          errorRaw: decoded.raw ?? null,
+          errorSignature: decoded.signature ?? null,
+        });
+        console.error(`[${label}]`, decoded.title, "—", decoded.hint, e);
+        return null;
       } finally {
         setLoading(false);
       }

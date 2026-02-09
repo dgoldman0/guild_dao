@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, Vote, ScrollText, Landmark,
   UserCircle, Wallet, LogOut, Shield, AlertCircle, CheckCircle, Info, X,
+  AlertTriangle, ChevronDown,
 } from "lucide-react";
 import { useWeb3 } from "../context/Web3Context";
 import { shortAddress, rankName } from "../lib/format";
@@ -37,26 +39,74 @@ function SidebarLink({ to, icon: Icon, label }) {
 
 function ToastBar() {
   const { toast } = useWeb3();
+  const [showRaw, setShowRaw] = useState(false);
+
   if (!toast) return null;
+
+  const isRichError = toast.type === "error" && toast.errorTitle;
+
   const colors = {
     info: "border-blue-500/50 bg-blue-500/10 text-blue-300",
     success: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300",
-    error: "border-red-500/50 bg-red-500/10 text-red-300",
+    error: "border-red-500/50 bg-red-900/30 text-red-200",
   };
   const icons = {
-    info: <Info size={16} />,
-    success: <CheckCircle size={16} />,
-    error: <AlertCircle size={16} />,
+    info: <Info size={16} className="shrink-0 mt-0.5" />,
+    success: <CheckCircle size={16} className="shrink-0 mt-0.5" />,
+    error: <AlertTriangle size={16} className="shrink-0 mt-0.5 text-red-400" />,
   };
+
   return (
-    <div className="fixed bottom-6 right-6 z-50 animate-slide-up">
+    <div className="fixed bottom-6 right-6 z-50 animate-slide-up max-w-md">
       <div
-        className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm shadow-xl ${
-          colors[toast.type]
-        }`}
+        className={`rounded-lg border shadow-2xl ${colors[toast.type]}`}
       >
-        {icons[toast.type]}
-        {toast.msg}
+        {/* Main content row */}
+        <div className="flex items-start gap-3 px-4 py-3">
+          {icons[toast.type]}
+          <div className="flex-1 min-w-0">
+            {isRichError ? (
+              <>
+                {/* Label line */}
+                <p className="text-xs font-medium text-red-400/70">{toast.msg}</p>
+                {/* Error title */}
+                <p className="text-sm font-semibold text-red-200 mt-0.5">
+                  {toast.errorTitle}
+                </p>
+                {/* Actionable hint */}
+                <p className="text-xs text-red-300/80 mt-1 leading-relaxed">
+                  {toast.errorHint}
+                </p>
+                {/* Raw error data (collapsible) */}
+                {toast.errorRaw && (
+                  <button
+                    onClick={() => setShowRaw((p) => !p)}
+                    className="mt-1.5 flex items-center gap-1 text-[10px] text-red-400/50 hover:text-red-400/80 transition-colors"
+                  >
+                    <ChevronDown size={10} className={`transition-transform ${showRaw ? "rotate-180" : ""}`} />
+                    Technical details
+                  </button>
+                )}
+                {showRaw && toast.errorRaw && (
+                  <code className="mt-1 block break-all rounded bg-red-950/50 px-2 py-1 text-[10px] font-mono text-red-400/60">
+                    {toast.errorRaw}
+                  </code>
+                )}
+              </>
+            ) : (
+              <p className="text-sm">{toast.msg}</p>
+            )}
+          </div>
+          {/* Dismiss button */}
+          {toast.dismiss && (
+            <button
+              onClick={toast.dismiss}
+              className="shrink-0 rounded p-0.5 hover:bg-white/10 transition-colors"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

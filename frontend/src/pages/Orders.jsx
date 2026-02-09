@@ -3,7 +3,7 @@ import { RefreshCw, Plus, Play, ShieldOff, Undo2, Check } from "lucide-react";
 import { useWeb3 } from "../context/Web3Context";
 import RankBadge from "../components/RankBadge";
 import Modal from "../components/Modal";
-import { shortAddress, formatDateTime, formatTimeRemaining, rankName } from "../lib/format";
+import { shortAddress, formatDateTime, formatTimeRemaining, rankName, resultToObject } from "../lib/format";
 import { ORDER_TYPES, RANK_NAMES } from "../lib/constants";
 
 function orderStatus(o, now) {
@@ -47,7 +47,7 @@ export default function Orders() {
       const nextId = Number(await governance.nextOrderId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getOrder(id).then((o) => ({ ...o, _id: id })).catch(() => null)
+          governance.getOrder(id).then((o) => ({ ...resultToObject(o), _id: id })).catch(() => null)
         )
       );
       setOrders(results.filter(Boolean).filter((o) => o.exists).reverse());

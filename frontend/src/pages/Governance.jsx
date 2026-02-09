@@ -3,7 +3,7 @@ import { RefreshCw, Plus, ThumbsUp, ThumbsDown, Check, X } from "lucide-react";
 import { useWeb3 } from "../context/Web3Context";
 import RankBadge from "../components/RankBadge";
 import Modal from "../components/Modal";
-import { shortAddress, formatDateTime, formatTimeRemaining, rankName, pct } from "../lib/format";
+import { shortAddress, formatDateTime, formatTimeRemaining, rankName, pct, resultToObject } from "../lib/format";
 import { PROPOSAL_TYPES, RANK_NAMES } from "../lib/constants";
 
 function statusBadge(p, now) {
@@ -62,7 +62,7 @@ export default function Governance() {
       const nextId = Number(await governance.nextProposalId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getProposal(id).then((p) => ({ ...p, _id: id })).catch(() => null)
+          governance.getProposal(id).then((p) => ({ ...resultToObject(p), _id: id })).catch(() => null)
         )
       );
       setProposals(results.filter(Boolean).filter((p) => p.exists).reverse());

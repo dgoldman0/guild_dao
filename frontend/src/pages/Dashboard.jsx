@@ -5,7 +5,7 @@ import { useWeb3 } from "../context/Web3Context";
 import EpochRing from "../components/EpochRing";
 import { RankBadgeLarge } from "../components/RankBadge";
 import StatCard from "../components/StatCard";
-import { formatETH, formatPower, formatDate, formatTimeRemaining, rankName } from "../lib/format";
+import { formatETH, formatPower, formatDate, formatTimeRemaining, rankName, isBootstrapFee } from "../lib/format";
 import { EPOCH_SECONDS } from "../lib/constants";
 
 export default function Dashboard() {
@@ -165,7 +165,12 @@ export default function Dashboard() {
               <p className="text-xs font-medium uppercase tracking-wider text-gray-500">
                 Fee Status
               </p>
-              {feeRemaining > 0 ? (
+              {isBootstrapFee(myFeePaidUntil) ? (
+                <p className="mt-1 text-sm text-gray-400">
+                  Bootstrap member —{" "}
+                  <span className="font-semibold text-emerald-400">no fee required</span>
+                </p>
+              ) : feeRemaining > 0 ? (
                 <p className="mt-1 text-sm text-gray-300">
                   Paid until{" "}
                   <span className="font-semibold text-white">
@@ -182,12 +187,14 @@ export default function Dashboard() {
                 </p>
               )}
             </div>
-            <Link to="/profile" className="btn-gold text-xs">
-              Pay Fee <ArrowRight size={14} />
-            </Link>
+            {!isBootstrapFee(myFeePaidUntil) && (
+              <Link to="/profile" className="btn-gold text-xs">
+                Pay Fee <ArrowRight size={14} />
+              </Link>
+            )}
           </div>
           {/* Progress bar */}
-          {feeRemaining > 0 && (
+          {!isBootstrapFee(myFeePaidUntil) && feeRemaining > 0 && (
             <div className="mt-3 h-1.5 rounded-full bg-gray-800">
               <div
                 className={`h-full rounded-full transition-all ${

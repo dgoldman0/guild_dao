@@ -6,7 +6,7 @@ import { RankBadgeLarge } from "../components/RankBadge";
 import Modal from "../components/Modal";
 import {
   shortAddress, rankName, formatETH, formatDate, formatPower,
-  formatTimeRemaining, formatTokens,
+  formatTimeRemaining, formatTokens, resultToObject, isBootstrapFee,
 } from "../lib/format";
 import { EPOCH_SECONDS, RANK_NAMES } from "../lib/constants";
 import { ERC20_ABI } from "../contracts/abis";
@@ -72,7 +72,7 @@ export default function MyProfile() {
       const nextId = Number(await governance.nextInviteId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getInvite(id).then((inv) => ({ ...inv, _id: id })).catch(() => null)
+          governance.getInvite(id).then((inv) => ({ ...resultToObject(inv), _id: id })).catch(() => null)
         )
       );
       setInvites(
@@ -145,7 +145,7 @@ export default function MyProfile() {
   }
 
   const feeRemaining = Number(myFeePaidUntil) - now;
-  const isBootstrap = Number(myFeePaidUntil) > 1e15;
+  const isBootstrap = isBootstrapFee(myFeePaidUntil);
 
   return (
     <div className="mx-auto max-w-4xl animate-fade-in space-y-6">

@@ -1,6 +1,38 @@
 import { formatEther as fmtEther } from "ethers";
 import { RANK_NAMES } from "./constants";
 
+/**
+ * Convert an ethers v6 Result (array-like) to a plain object.
+ * Spreading a Result with { ...result } only gives numeric keys;
+ * this extracts the named tuple fields properly.
+ */
+export function resultToObject(result) {
+  if (result == null) return result;
+  // Result.toObject() exists in ethers v6.7+
+  if (typeof result.toObject === "function") return result.toObject();
+  // Fallback: build from entries using the Result's named keys
+  const obj = {};
+  const keys = Object.keys(result).filter((k) => isNaN(Number(k)));
+  if (keys.length > 0) {
+    for (const k of keys) obj[k] = result[k];
+  } else {
+    // No named keys — just return positional
+    for (let i = 0; i < result.length; i++) obj[i] = result[i];
+  }
+  return obj;
+}
+
+/** Sentinel value for bootstrap members who never expire */
+const MAX_UINT64 = 18446744073709551615n;
+
+/** Whether a feePaidUntil value is the bootstrap sentinel (max uint64) */
+export function isBootstrapFee(feePaidUntil) {
+  if (feePaidUntil == null) return false;
+  const v = BigInt(feePaidUntil);
+  // anything > year 3000 is definitely the sentinel
+  return v > 32503680000n;
+}
+
 /** Truncate an address: 0x1234…5678 */
 export function shortAddress(addr) {
   if (!addr) return "—";

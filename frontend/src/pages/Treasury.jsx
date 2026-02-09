@@ -3,7 +3,7 @@ import { RefreshCw, Plus, ThumbsUp, ThumbsDown, Check, Play, Lock, Unlock } from
 import { parseEther, AbiCoder } from "ethers";
 import { useWeb3 } from "../context/Web3Context";
 import Modal from "../components/Modal";
-import { formatETH, formatDateTime, formatTimeRemaining, pct, shortAddress } from "../lib/format";
+import { formatETH, formatDateTime, formatTimeRemaining, pct, shortAddress, resultToObject } from "../lib/format";
 import { ACTION_TYPES } from "../lib/constants";
 
 export default function Treasury() {
@@ -42,7 +42,7 @@ export default function Treasury() {
         Array.from({ length: Number(nextId) - 1 }, (_, i) => i + 1).map(async (id) => {
           try {
             const p = await treasury.getProposal(id);
-            return { ...p, _id: id };
+            return { ...resultToObject(p), _id: id };
           } catch {
             return null;
           }
