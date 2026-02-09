@@ -64,6 +64,8 @@ contract GovernanceController is ReentrancyGuard {
     error OrderNotReady();
     error OrderIsBlocked();
     error OrderWrongType();
+    error OrderAlreadyRescinded();
+    error TooManyActiveOrders();
     error InvalidParameterValue();
     error ParameterOutOfBounds();
 
@@ -120,6 +122,9 @@ contract GovernanceController is ReentrancyGuard {
 
     // target member => outstanding order id (one at a time)
     mapping(uint32 => uint64) public pendingOrderOfTarget;
+
+    // issuer member => number of currently active (unresolved) orders
+    mapping(uint32 => uint16) public activeOrdersOf;
 
     // ================================================================
     //                   GOVERNANCE PROPOSALS
@@ -184,6 +189,7 @@ contract GovernanceController is ReentrancyGuard {
     event OrderBlocked(uint64 indexed orderId, uint32 indexed blockerId);
     event OrderBlockedByGovernance(uint64 indexed orderId, uint64 indexed proposalId);
     event OrderExecuted(uint64 indexed orderId);
+    event OrderRescinded(uint64 indexed orderId, uint32 indexed issuerId);
 
     // Proposal events
     event ProposalCreated(uint64 indexed proposalId, ProposalType proposalType, uint32 indexed proposerId, uint32 indexed targetId);
@@ -225,6 +231,18 @@ contract GovernanceController is ReentrancyGuard {
 
     function _currentEpoch() internal view returns (uint64) {
         return uint64(block.timestamp / dao.INVITE_EPOCH());
+    }
+
+    function _enforceOrderLimit(uint32 issuerId, RankedMembershipDAO.Rank issuerRank) internal view {
+        uint8 limit = dao.orderLimitOfRank(issuerRank);
+        if (limit == 0) revert RankTooLow();
+        if (activeOrdersOf[issuerId] >= limit) revert TooManyActiveOrders();
+    }
+
+    function _decrementActiveOrders(uint32 issuerId) internal {
+        if (activeOrdersOf[issuerId] > 0) {
+            activeOrdersOf[issuerId] -= 1;
+        }
     }
 
     function _enforceProposalLimit(uint32 proposerId) internal view {
@@ -345,8 +363,11 @@ contract GovernanceController is ReentrancyGuard {
         // newRank must be <= issuerRank - 2
         if (_rankIndex(newRank) > issuerIdx - 2) revert InvalidPromotion();
 
+        _enforceOrderLimit(issuerId, issuerRank);
+
         orderId = nextOrderId++;
         pendingOrderOfTarget[targetId] = orderId;
+        activeOrdersOf[issuerId] += 1;
 
         ordersById[orderId] = PendingOrder({
             exists: true,
@@ -382,8 +403,11 @@ contract GovernanceController is ReentrancyGuard {
         // issuer must be >= target + 2 ranks
         if (_rankIndex(issuerRank) < _rankIndex(targetRank) + 2) revert InvalidDemotion();
 
+        _enforceOrderLimit(issuerId, issuerRank);
+
         orderId = nextOrderId++;
         pendingOrderOfTarget[targetId] = orderId;
+        activeOrdersOf[issuerId] += 1;
 
         ordersById[orderId] = PendingOrder({
             exists: true,
@@ -421,8 +445,11 @@ contract GovernanceController is ReentrancyGuard {
         // issuer must be >= target + 2 ranks
         if (_rankIndex(issuerRank) < _rankIndex(targetRank) + 2) revert InvalidTarget();
 
+        _enforceOrderLimit(issuerId, issuerRank);
+
         orderId = nextOrderId++;
         pendingOrderOfTarget[targetId] = orderId;
+        activeOrdersOf[issuerId] += 1;
 
         ordersById[orderId] = PendingOrder({
             exists: true,
@@ -461,12 +488,33 @@ contract GovernanceController is ReentrancyGuard {
 
         o.blocked = true;
         o.blockedById = blockerId;
+        _decrementActiveOrders(o.issuerId);
 
         if (pendingOrderOfTarget[o.targetId] == orderId) {
             pendingOrderOfTarget[o.targetId] = 0;
         }
 
         emit OrderBlocked(orderId, blockerId);
+    }
+
+    function rescindOrder(uint64 orderId) external nonReentrant {
+        uint32 callerId = _requireMemberAuthority(msg.sender);
+
+        PendingOrder storage o = ordersById[orderId];
+        if (!o.exists) revert NoPendingAction();
+        if (o.issuerId != callerId) revert InvalidTarget();
+        if (o.executed) revert OrderNotReady();
+        if (o.blocked) revert OrderIsBlocked();
+
+        o.blocked = true;          // treat rescind as a self-block
+        o.blockedById = callerId;
+        _decrementActiveOrders(callerId);
+
+        if (pendingOrderOfTarget[o.targetId] == orderId) {
+            pendingOrderOfTarget[o.targetId] = 0;
+        }
+
+        emit OrderRescinded(orderId, callerId);
     }
 
     function acceptPromotionGrant(uint64 orderId) external nonReentrant {
@@ -487,6 +535,7 @@ contract GovernanceController is ReentrancyGuard {
         dao.setRank(targetId, o.newRank, callerId, false);
 
         o.executed = true;
+        _decrementActiveOrders(o.issuerId);
         if (pendingOrderOfTarget[targetId] == orderId) {
             pendingOrderOfTarget[targetId] = 0;
         }
@@ -517,6 +566,7 @@ contract GovernanceController is ReentrancyGuard {
         }
 
         o.executed = true;
+        _decrementActiveOrders(o.issuerId);
         if (pendingOrderOfTarget[targetId] == orderId) {
             pendingOrderOfTarget[targetId] = 0;
         }
@@ -581,41 +631,26 @@ contract GovernanceController is ReentrancyGuard {
         proposalId = _createProposal(ProposalType.ChangeAuthority, proposerId, targetId, RankedMembershipDAO.Rank(0), newAuthority, 0, 0, address(0), 0, address(0));
     }
 
-    // --- Parameter change proposals ---
+    // --- Parameter change proposals (unified) ---
 
-    function createProposalChangeVotingPeriod(uint64 newValue) external nonReentrant returns (uint64 proposalId) {
-        if (newValue < dao.MIN_VOTING_PERIOD() || newValue > dao.MAX_VOTING_PERIOD()) revert ParameterOutOfBounds();
+    function createProposalChangeParameter(ProposalType pType, uint64 newValue) external nonReentrant returns (uint64 proposalId) {
+        if (pType == ProposalType.ChangeVotingPeriod) {
+            if (newValue < dao.MIN_VOTING_PERIOD() || newValue > dao.MAX_VOTING_PERIOD()) revert ParameterOutOfBounds();
+        } else if (pType == ProposalType.ChangeQuorumBps) {
+            if (newValue < dao.MIN_QUORUM_BPS() || newValue > dao.MAX_QUORUM_BPS()) revert ParameterOutOfBounds();
+        } else if (pType == ProposalType.ChangeOrderDelay) {
+            if (newValue < dao.MIN_ORDER_DELAY() || newValue > dao.MAX_ORDER_DELAY()) revert ParameterOutOfBounds();
+        } else if (pType == ProposalType.ChangeInviteExpiry) {
+            if (newValue < dao.MIN_INVITE_EXPIRY() || newValue > dao.MAX_INVITE_EXPIRY()) revert ParameterOutOfBounds();
+        } else if (pType == ProposalType.ChangeExecutionDelay) {
+            if (newValue < dao.MIN_EXECUTION_DELAY() || newValue > dao.MAX_EXECUTION_DELAY()) revert ParameterOutOfBounds();
+        } else {
+            revert InvalidParameterValue();
+        }
+
         (uint32 proposerId,) = _requireMember(msg.sender);
         _enforceProposalLimit(proposerId);
-        proposalId = _createProposal(ProposalType.ChangeVotingPeriod, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), newValue, 0, address(0), 0, address(0));
-    }
-
-    function createProposalChangeQuorumBps(uint16 newValue) external nonReentrant returns (uint64 proposalId) {
-        if (newValue < dao.MIN_QUORUM_BPS() || newValue > dao.MAX_QUORUM_BPS()) revert ParameterOutOfBounds();
-        (uint32 proposerId,) = _requireMember(msg.sender);
-        _enforceProposalLimit(proposerId);
-        proposalId = _createProposal(ProposalType.ChangeQuorumBps, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), uint64(newValue), 0, address(0), 0, address(0));
-    }
-
-    function createProposalChangeOrderDelay(uint64 newValue) external nonReentrant returns (uint64 proposalId) {
-        if (newValue < dao.MIN_ORDER_DELAY() || newValue > dao.MAX_ORDER_DELAY()) revert ParameterOutOfBounds();
-        (uint32 proposerId,) = _requireMember(msg.sender);
-        _enforceProposalLimit(proposerId);
-        proposalId = _createProposal(ProposalType.ChangeOrderDelay, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), newValue, 0, address(0), 0, address(0));
-    }
-
-    function createProposalChangeInviteExpiry(uint64 newValue) external nonReentrant returns (uint64 proposalId) {
-        if (newValue < dao.MIN_INVITE_EXPIRY() || newValue > dao.MAX_INVITE_EXPIRY()) revert ParameterOutOfBounds();
-        (uint32 proposerId,) = _requireMember(msg.sender);
-        _enforceProposalLimit(proposerId);
-        proposalId = _createProposal(ProposalType.ChangeInviteExpiry, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), newValue, 0, address(0), 0, address(0));
-    }
-
-    function createProposalChangeExecutionDelay(uint64 newValue) external nonReentrant returns (uint64 proposalId) {
-        if (newValue < dao.MIN_EXECUTION_DELAY() || newValue > dao.MAX_EXECUTION_DELAY()) revert ParameterOutOfBounds();
-        (uint32 proposerId,) = _requireMember(msg.sender);
-        _enforceProposalLimit(proposerId);
-        proposalId = _createProposal(ProposalType.ChangeExecutionDelay, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), newValue, 0, address(0), 0, address(0));
+        proposalId = _createProposal(pType, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), newValue, 0, address(0), 0, address(0));
     }
 
     // --- BlockOrder and TransferERC20 proposals ---
@@ -774,6 +809,7 @@ contract GovernanceController is ReentrancyGuard {
 
         o.blocked = true;
         o.blockedById = 0; // governance blocked
+        _decrementActiveOrders(o.issuerId);
 
         if (pendingOrderOfTarget[o.targetId] == orderId) {
             pendingOrderOfTarget[o.targetId] = 0;

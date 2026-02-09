@@ -23,6 +23,8 @@ interface IRankedMembershipDAO {
 
     function proposalLimitOfRank(Rank r) external pure returns (uint8);
 
+    function orderLimitOfRank(Rank r) external pure returns (uint8);
+
     function votingPowerOfRank(Rank r) external pure returns (uint224);
 
     // Governance parameters (configurable via DAO governance)

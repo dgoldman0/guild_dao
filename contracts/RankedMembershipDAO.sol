@@ -84,6 +84,11 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         return uint8(1 + (_rankIndex(r) - _rankIndex(Rank.F)));
     }
 
+    function orderLimitOfRank(Rank r) public pure returns (uint8) {
+        if (r < Rank.E) return 0;           // G, F cannot issue orders
+        return uint8(1 << (_rankIndex(r) - _rankIndex(Rank.E)));  // E=1, D=2, C=4, B=8, …
+    }
+
     // ================================================================
     //                          ERRORS
     // ================================================================
