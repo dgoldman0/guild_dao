@@ -57,6 +57,7 @@ export const PROPOSAL_TYPES = [
   "Change Execution Delay",
   "Block Order",
   "Transfer ERC-20",
+  "Reset Bootstrap Fee",
 ];
 
 // ── Order Types ────────────────────────────

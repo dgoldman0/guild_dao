@@ -27,6 +27,7 @@ function proposalDescription(p) {
     case 7: return `Change execution delay to ${Number(p.parameterValue) / 3600}h`;
     case 8: return `Block Order #${Number(p.orderIdToBlock)}`;
     case 9: return `Transfer ERC-20 to ${shortAddress(p.erc20Recipient)}`;
+    case 10: return `Reset bootstrap fee for Member #${Number(p.targetId)}`;
     default: return `Proposal Type ${t}`;
   }
 }
@@ -101,6 +102,7 @@ export default function Governance() {
     else if (t >= 3 && t <= 7) txP = governance.createProposalChangeParameter(t, BigInt(formValue));
     else if (t === 8) txP = governance.createProposalBlockOrder(Number(formOrderId));
     else if (t === 9) txP = governance.createProposalTransferERC20(formToken, BigInt(formAmount), formRecipient);
+    else if (t === 10) txP = governance.createProposalResetBootstrapFee(Number(formTarget));
     else return;
 
     await sendTx("Create Proposal", txP);
@@ -301,6 +303,12 @@ export default function Governance() {
                 <input className="input" value={formRecipient} onChange={(e) => setFormRecipient(e.target.value)} placeholder="0x…" />
               </div>
             </>
+          )}
+          {formType === 10 && (
+            <div>
+              <label className="label">Bootstrap Member ID</label>
+              <input className="input" type="number" value={formTarget} onChange={(e) => setFormTarget(e.target.value)} placeholder="e.g. 1" />
+            </div>
           )}
 
           <div className="flex justify-end gap-2 pt-2">

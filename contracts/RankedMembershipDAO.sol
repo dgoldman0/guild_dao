@@ -113,6 +113,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     error ParameterOutOfBounds();
     error MemberNotExpired();
     error AlreadyInactive();
+    error NotBootstrapMember();
 
     // ================================================================
     //                        MEMBERSHIP
@@ -204,6 +205,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     event GracePeriodChanged(uint64 oldValue, uint64 newValue);
     event PayoutTreasuryChanged(address indexed oldPayout, address indexed newPayout);
     event FeePaid(uint32 indexed memberId, uint64 paidUntil);
+    event BootstrapFeeReset(uint32 indexed memberId, uint64 newPaidUntil);
     event MemberDeactivated(uint32 indexed memberId);
     event MemberReactivated(uint32 indexed memberId);
 
@@ -396,6 +398,16 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         }
     }
 
+    /// @notice Governance can convert a bootstrap member to fee-paying status.
+    ///         Resets feePaidUntil from type(uint64).max to now + EPOCH.
+    function resetBootstrapFee(uint32 memberId) external onlyController {
+        Member storage m = membersById[memberId];
+        if (!m.exists) revert InvalidTarget();
+        if (feePaidUntil[memberId] != type(uint64).max) revert NotBootstrapMember();
+        feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
+        emit BootstrapFeeReset(memberId, feePaidUntil[memberId]);
+    }
+
     // ================================================================
     //    FEE-ROUTER-ONLY (called by FeeRouter after collecting payment)
     // ================================================================
@@ -407,7 +419,10 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         if (!m.exists) revert InvalidTarget();
 
         uint64 paidUntil = feePaidUntil[memberId];
-        if (paidUntil < uint64(block.timestamp)) {
+        if (paidUntil == type(uint64).max) {
+            // Bootstrap member paying voluntarily — reset sentinel
+            feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
+        } else if (paidUntil < uint64(block.timestamp)) {
             feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
         } else {
             feePaidUntil[memberId] = paidUntil + EPOCH;

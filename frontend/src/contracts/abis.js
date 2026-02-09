@@ -102,6 +102,7 @@ export const GOVERNANCE_ABI = [
   "function createProposalChangeParameter(uint8 pType, uint64 newValue) returns (uint64)",
   "function createProposalBlockOrder(uint64 orderId) returns (uint64)",
   "function createProposalTransferERC20(address token, uint256 amount, address recipient) returns (uint64)",
+  "function createProposalResetBootstrapFee(uint32 targetMemberId) returns (uint64)",
 
   // ── Proposal actions ─────────────────────────
   "function castVote(uint64 proposalId, bool support)",

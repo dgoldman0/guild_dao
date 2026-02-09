@@ -140,7 +140,8 @@ contract GovernanceController is ReentrancyGuard {
         ChangeInviteExpiry,
         ChangeExecutionDelay,
         BlockOrder,
-        TransferERC20
+        TransferERC20,
+        ResetBootstrapFee
     }
 
     struct Proposal {
@@ -683,6 +684,19 @@ contract GovernanceController is ReentrancyGuard {
         proposalId = _createProposal(ProposalType.TransferERC20, proposerId, 0, RankedMembershipDAO.Rank(0), address(0), 0, 0, token, amount, recipient);
     }
 
+    /// @notice Create a proposal to convert a bootstrap member to fee-paying status.
+    ///         The member's feePaidUntil will be reset from type(uint64).max to now + EPOCH.
+    function createProposalResetBootstrapFee(uint32 targetMemberId) external nonReentrant returns (uint64 proposalId) {
+        if (!_memberExists(targetMemberId)) revert InvalidTarget();
+        if (dao.feePaidUntil(targetMemberId) != type(uint64).max) revert InvalidTarget();
+
+        (uint32 proposerId, RankedMembershipDAO.Rank proposerRank) = _requireMember(msg.sender);
+        if (_rankIndex(proposerRank) < _rankIndex(RankedMembershipDAO.Rank.F)) revert RankTooLow();
+        _enforceProposalLimit(proposerId);
+
+        proposalId = _createProposal(ProposalType.ResetBootstrapFee, proposerId, targetMemberId, RankedMembershipDAO.Rank(0), address(0), 0, 0, address(0), 0, address(0));
+    }
+
     // ================================================================
     //              GOVERNANCE: VOTING
     // ================================================================
@@ -777,6 +791,11 @@ contract GovernanceController is ReentrancyGuard {
         }
         if (p.proposalType == ProposalType.ChangeExecutionDelay) {
             dao.setExecutionDelay(p.parameterValue);
+            return;
+        }
+
+        if (p.proposalType == ProposalType.ResetBootstrapFee) {
+            dao.resetBootstrapFee(p.targetId);
             return;
         }
 

@@ -34,7 +34,7 @@ const PType = {
   GrantRank: 0, DemoteRank: 1, ChangeAuthority: 2,
   ChangeVotingPeriod: 3, ChangeQuorumBps: 4, ChangeOrderDelay: 5,
   ChangeInviteExpiry: 6, ChangeExecutionDelay: 7,
-  BlockOrder: 8, TransferERC20: 9,
+  BlockOrder: 8, TransferERC20: 9, ResetBootstrapFee: 10,
 };
 
 describe("Guild DAO System", function () {
@@ -1296,6 +1296,114 @@ describe("Guild DAO System", function () {
         await dao2.setMemberActive(1, true);
         expect(await dao2.isMemberActive(1)).to.be.true;
         expect(await dao2.votingPowerOfMember(1)).to.equal(512n); // SSS
+      });
+    });
+
+    describe("Bootstrap fee reset", function () {
+      it("bootstrap member can voluntarily pay fee — sentinel is cleared", async function () {
+        // owner (deployer) is bootstrap SSS member #1
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        const fee = await dao.feeOfRank(Rank.SSS); // 0.001 * 2^9 = 0.512 ETH
+
+        expect(await dao.feePaidUntil(1)).to.equal(ethers.MaxUint256 >> 192n); // sentinel
+        await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
+
+        const paidUntil = await dao.feePaidUntil(1);
+        const now = (await ethers.provider.getBlock("latest")).timestamp;
+        const EPOCH = 100 * 86400;
+        // Should be now + EPOCH, not overflowed
+        expect(paidUntil).to.be.closeTo(now + EPOCH, 5);
+        expect(paidUntil).to.be.lessThan(ethers.MaxUint256 >> 192n);
+      });
+
+      it("resetBootstrapFee via governance converts bootstrap to fee-paying", async function () {
+        // owner is SSS (#1), member1 (#2) will be bootstrap SSS too
+        await dao.bootstrapAddMember(member1.address, Rank.A);
+        const m1Id = await dao.memberIdByAuthority(member1.address);
+        expect(await dao.feePaidUntil(m1Id)).to.equal(ethers.MaxUint256 >> 192n);
+
+        // Finalize bootstrap so governance is operational
+        await dao.finalizeBootstrap();
+
+        // Create proposal to reset bootstrap fee for m1
+        await governance.connect(owner).createProposalResetBootstrapFee(m1Id);
+        const propId = (await governance.nextProposalId()) - 1n;
+        await governance.connect(owner).castVote(propId, true);
+        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await governance.connect(owner).finalizeProposal(propId);
+
+        const p = await governance.getProposal(propId);
+        expect(p.succeeded).to.be.true;
+
+        const paidUntil = await dao.feePaidUntil(m1Id);
+        const now = (await ethers.provider.getBlock("latest")).timestamp;
+        const EPOCH = 100 * 86400;
+        expect(paidUntil).to.be.closeTo(now + EPOCH, 5);
+        expect(paidUntil).to.be.lessThan(ethers.MaxUint256 >> 192n);
+      });
+
+      it("resetBootstrapFee reverts for non-bootstrap member", async function () {
+        const m1Id = await inviteAndAccept(owner, member1);
+        // m1 is invited (not bootstrap), feePaidUntil = now + EPOCH
+        const DAO2 = await ethers.getContractFactory("RankedMembershipDAO");
+        const dao2 = await DAO2.deploy();
+        await dao2.waitForDeployment();
+        await dao2.setController(owner.address);
+        // member 1 (deployer/bootstrap SSS) — reset it first to prove it works
+        await dao2.resetBootstrapFee(1);
+        // Now try again — should revert since it's no longer bootstrap
+        await expect(
+          dao2.resetBootstrapFee(1)
+        ).to.be.revertedWithCustomError(dao2, "NotBootstrapMember");
+      });
+
+      it("resetBootstrapFee reverts for non-existent member", async function () {
+        const DAO2 = await ethers.getContractFactory("RankedMembershipDAO");
+        const dao2 = await DAO2.deploy();
+        await dao2.waitForDeployment();
+        await dao2.setController(owner.address);
+        await expect(
+          dao2.resetBootstrapFee(999)
+        ).to.be.revertedWithCustomError(dao2, "InvalidTarget");
+      });
+
+      it("createProposalResetBootstrapFee reverts for non-bootstrap member", async function () {
+        const m1Id = await inviteAndAccept(owner, member1);
+        // m1 is invited, not bootstrap
+        await expect(
+          governance.connect(owner).createProposalResetBootstrapFee(m1Id)
+        ).to.be.revertedWithCustomError(governance, "InvalidTarget");
+      });
+
+      it("createProposalResetBootstrapFee reverts if rank too low", async function () {
+        // Bootstrap a G member and finalize
+        await dao.bootstrapAddMember(member1.address, Rank.G);
+        const m1Id = await dao.memberIdByAuthority(member1.address);
+        await dao.finalizeBootstrap();
+
+        // Invite another G member — they can't create proposals (rank < F)
+        const m2Id = await inviteAndAccept(owner, member2);
+        // m2 is G rank, below F minimum for proposals
+        await expect(
+          governance.connect(member2).createProposalResetBootstrapFee(1)
+        ).to.be.revertedWithCustomError(governance, "RankTooLow");
+      });
+
+      it("second fee payment after sentinel reset extends normally", async function () {
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        const fee = await dao.feeOfRank(Rank.SSS);
+        const EPOCH = 100 * 86400;
+
+        // First payment resets sentinel
+        await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
+        const after1 = await dao.feePaidUntil(1);
+
+        // Second payment extends by EPOCH
+        await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
+        const after2 = await dao.feePaidUntil(1);
+
+        expect(after2 - after1).to.equal(EPOCH);
       });
     });
   });
