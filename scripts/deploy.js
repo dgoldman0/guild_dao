@@ -25,11 +25,19 @@ async function main() {
 
   // 3. Wire the controller into the DAO
   console.log("\n🔗 Setting controller on DAO...");
-  const tx = await dao.setController(governanceAddress);
+  let tx = await dao.setController(governanceAddress);
   await tx.wait();
   console.log("✅ Controller set to:", governanceAddress);
 
-  // 4. Deploy MembershipTreasury
+  // 4. Deploy TreasurerModule
+  console.log("\n💼 Deploying TreasurerModule...");
+  const TreasurerModule = await hre.ethers.getContractFactory("TreasurerModule");
+  const treasurerModule = await TreasurerModule.deploy(daoAddress);
+  await treasurerModule.waitForDeployment();
+  const moduleAddress = await treasurerModule.getAddress();
+  console.log("✅ TreasurerModule deployed to:", moduleAddress);
+
+  // 5. Deploy MembershipTreasury
   console.log("\n💰 Deploying MembershipTreasury...");
   const MembershipTreasury = await hre.ethers.getContractFactory("MembershipTreasury");
   const treasury = await MembershipTreasury.deploy(daoAddress);
@@ -37,18 +45,28 @@ async function main() {
   const treasuryAddress = await treasury.getAddress();
   console.log("✅ MembershipTreasury deployed to:", treasuryAddress);
 
+  // 6. Wire Treasury ↔ Module
+  console.log("\n🔗 Wiring Treasury ↔ TreasurerModule...");
+  tx = await treasury.setTreasurerModule(moduleAddress);
+  await tx.wait();
+  tx = await treasurerModule.setTreasury(treasuryAddress);
+  await tx.wait();
+  console.log("✅ Module linked to Treasury");
+
   console.log("\n🎉 Deployment complete!");
-  console.log("==================================");
+  console.log("======================================");
   console.log("RankedMembershipDAO:  ", daoAddress);
   console.log("GovernanceController: ", governanceAddress);
+  console.log("TreasurerModule:      ", moduleAddress);
   console.log("MembershipTreasury:   ", treasuryAddress);
-  console.log("==================================");
+  console.log("======================================");
 
   // Verify on live networks
   if (hre.network.name !== "hardhat" && hre.network.name !== "localhost") {
     console.log("\n⏳ Waiting for block confirmations...");
     await dao.deploymentTransaction().wait(5);
     await governance.deploymentTransaction().wait(5);
+    await treasurerModule.deploymentTransaction().wait(5);
     await treasury.deploymentTransaction().wait(5);
 
     console.log("\n🔍 Verifying contracts on Arbiscan...");
@@ -56,6 +74,7 @@ async function main() {
     for (const [name, addr, args] of [
       ["RankedMembershipDAO", daoAddress, []],
       ["GovernanceController", governanceAddress, [daoAddress]],
+      ["TreasurerModule", moduleAddress, [daoAddress]],
       ["MembershipTreasury", treasuryAddress, [daoAddress]],
     ]) {
       try {

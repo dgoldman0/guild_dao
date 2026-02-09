@@ -1,4 +1,4 @@
-1. Might really be good to break the contract up. And there was always the idea of taking this approach and them mapping it onto the AragonOS paradigm to integrate into their existing infrastructure. Probably would be good to have the actual rank information be in one contract and have it controlled by a separate contract that has the governance infrastructure.
+1. I thought I had order limits for ranks. Will need to implement how many concurrent orders a member of a given rank can issue. I think I also need to make it possible to rescind orders early then. 
 
 2. Membership fees. Active/inactive membership (turns on/of voting power and will require adjustment in both contracts) based on whether fees are paid (higher rank requires higher fees) might be interesting and also acts as a nice token sink for a DAO's economic token if it has its own, or a shared token commonly used for fees. Probably tied to 100 day epochs.
 
