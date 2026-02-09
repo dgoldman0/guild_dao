@@ -1,1 +1,24 @@
 ideas.txt
+
+# Dependencies
+node_modules
+
+# Environment variables
+.env
+
+# Hardhat files
+cache
+artifacts
+coverage
+coverage.json
+typechain
+typechain-types
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Logs
+*.log

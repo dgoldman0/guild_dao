@@ -1,45 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+import {IRankedMembershipDAO} from "./interfaces/IRankedMembershipDAO.sol";
 
-/// @notice Minimal interface into RankedMembershipDAO
-interface IRankedMembershipDAO {
-    enum Rank { G, F, E, D, C, B, A, S, SS, SSS }
-
-    function memberIdByAuthority(address a) external view returns (uint32);
-
-    function membersById(uint32 id)
-        external
-        view
-        returns (
-            bool exists,
-            uint32 memberId,
-            Rank rank,
-            address authority,
-            uint64 joinedAt
-        );
-
-    function votingPowerOfMemberAt(uint32 memberId, uint32 blockNumber) external view returns (uint224);
-    function totalVotingPowerAt(uint32 blockNumber) external view returns (uint224);
-
-    function proposalLimitOfRank(Rank r) external pure returns (uint8);
-
-    function votingPowerOfRank(Rank r) external pure returns (uint224);
-
-    // Governance parameters (configurable via DAO governance)
-    function votingPeriod() external view returns (uint64);
-    function quorumBps() external view returns (uint16);
-    function executionDelay() external view returns (uint64);
-}
-
-contract MembershipTreasury is Ownable2Step, ReentrancyGuard {
+contract MembershipTreasury is ReentrancyGuard, Ownable {
     using SafeCast for uint256;
     using SafeERC20 for IERC20;
 
@@ -457,7 +428,7 @@ contract MembershipTreasury is Ownable2Step, ReentrancyGuard {
     // Constructor
     // ----------------------------
 
-    constructor(address daoAddress) Ownable2Step(msg.sender) {
+    constructor(address daoAddress) Ownable(msg.sender) {
         if (daoAddress == address(0)) revert InvalidAddress();
         dao = IRankedMembershipDAO(daoAddress);
     }
@@ -915,9 +886,9 @@ contract MembershipTreasury is Ownable2Step, ReentrancyGuard {
         rank = r;
     }
 
-    function _proposalLimit(IRankedMembershipDAO.Rank r) internal pure returns (uint8) {
-        // mirror DAO behavior via interface call (pure there)
-        return IRankedMembershipDAO.proposalLimitOfRank(r);
+    function _proposalLimit(IRankedMembershipDAO.Rank r) internal view returns (uint8) {
+        // Get proposal limit from DAO
+        return dao.proposalLimitOfRank(r);
     }
 
     function _enforceProposalLimit(uint32 proposerId, IRankedMembershipDAO.Rank rank) internal view {

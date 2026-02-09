@@ -1,0 +1,19 @@
+{
+  "name": "guild-dao",
+  "version": "1.0.0",
+  "description": "Ranked Membership DAO with Treasury",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:arbitrum-sepolia": "hardhat run scripts/deploy.js --network arbitrumSepolia",
+    "verify": "hardhat verify --network arbitrumSepolia",
+    "node": "hardhat node"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@openzeppelin/contracts": "^5.0.1",
+    "hardhat": "^2.19.5",
+    "dotenv": "^16.4.1"
+  }
+}
