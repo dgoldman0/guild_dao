@@ -36,7 +36,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     //                        CONSTANTS
     // ================================================================
 
-    uint64 public constant INVITE_EPOCH = 100 days;
+    uint64 public constant EPOCH = 100 days;
 
     // Bounds for configurable parameters
     uint64 public constant MIN_INVITE_EXPIRY   = 1 hours;
@@ -59,6 +59,15 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     uint64 public votingPeriod   = 7 days;
     uint16 public quorumBps      = 2000; // 20%
     uint64 public executionDelay = 24 hours;
+
+    // ================================================================
+    //                  FEE CONFIGURATION
+    // ================================================================
+
+    address public feeToken;            // address(0) = ETH, otherwise ERC-20
+    uint256 public baseFee;             // per-epoch base fee (scales by rank)
+    uint64  public gracePeriod;         // seconds of grace before deactivation (0 = immediate)
+    address public payoutTreasury;      // where fee revenue is sent
 
     // ================================================================
     //                          RANKS
@@ -100,7 +109,10 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     error BootstrapAlreadyFinalized();
     error FundsNotAccepted();
     error NotController();
+    error NotFeeRouter();
     error ParameterOutOfBounds();
+    error MemberNotExpired();
+    error AlreadyInactive();
 
     // ================================================================
     //                        MEMBERSHIP
@@ -123,6 +135,13 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     Checkpoints.Trace224 private _totalPower;
 
     // ================================================================
+    //                     MEMBERSHIP FEES
+    // ================================================================
+
+    mapping(uint32 => bool)   public memberActive;
+    mapping(uint32 => uint64) public feePaidUntil;
+
+    // ================================================================
     //                        BOOTSTRAP
     // ================================================================
 
@@ -136,6 +155,17 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     modifier onlyController() {
         if (msg.sender != controller) revert NotController();
+        _;
+    }
+
+    // ================================================================
+    //                   FEE ROUTER (for fee payments)
+    // ================================================================
+
+    address public feeRouter;
+
+    modifier onlyFeeRouter() {
+        if (msg.sender != feeRouter) revert NotFeeRouter();
         _;
     }
 
@@ -168,6 +198,14 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     event OrderDelayChanged(uint64 oldValue, uint64 newValue);
     event InviteExpiryChanged(uint64 oldValue, uint64 newValue);
     event ExecutionDelayChanged(uint64 oldValue, uint64 newValue);
+    event FeeRouterSet(address indexed feeRouter);
+    event FeeTokenChanged(address indexed oldToken, address indexed newToken);
+    event BaseFeeChanged(uint256 oldValue, uint256 newValue);
+    event GracePeriodChanged(uint64 oldValue, uint64 newValue);
+    event PayoutTreasuryChanged(address indexed oldPayout, address indexed newPayout);
+    event FeePaid(uint32 indexed memberId, uint64 paidUntil);
+    event MemberDeactivated(uint32 indexed memberId);
+    event MemberReactivated(uint32 indexed memberId);
 
     // ================================================================
     //                        CONSTRUCTOR
@@ -202,6 +240,15 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         if (_controller == address(0)) revert InvalidAddress();
         controller = _controller;
         emit ControllerSet(_controller);
+    }
+
+    /// @notice Set the FeeRouter address (authorized to call recordFeePayment).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setFeeRouter(address _feeRouter) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        if (_feeRouter == address(0)) revert InvalidAddress();
+        feeRouter = _feeRouter;
+        emit FeeRouterSet(_feeRouter);
     }
 
     // ================================================================
@@ -239,7 +286,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
             joinedAt: uint64(block.timestamp)
         });
         memberIdByAuthority[authority] = newMemberId;
-
+        memberActive[newMemberId] = true;
+        feePaidUntil[newMemberId] = uint64(block.timestamp) + EPOCH;  // first epoch free
         uint224 p = votingPowerOfRank(Rank.G);
         _writeMemberPower(newMemberId, p);
         _writeTotalPower(totalVotingPower() + p);
@@ -291,6 +339,111 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         IERC20(token).safeTransfer(recipient, amount);
     }
 
+    /// @notice Set the ERC-20 fee token (address(0) = ETH).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setFeeToken(address newToken) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        address old = feeToken;
+        feeToken = newToken;
+        emit FeeTokenChanged(old, newToken);
+    }
+
+    /// @notice Set base fee (per-epoch, scales by rank).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setBaseFee(uint256 newValue) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        uint256 old = baseFee;
+        baseFee = newValue;
+        emit BaseFeeChanged(old, newValue);
+    }
+
+    /// @notice Set grace period (seconds after fee expiry before deactivation).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setGracePeriod(uint64 newValue) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        uint64 old = gracePeriod;
+        gracePeriod = newValue;
+        emit GracePeriodChanged(old, newValue);
+    }
+
+    /// @notice Set the address that receives fee revenue.
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setPayoutTreasury(address newPayout) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        if (newPayout == address(0)) revert InvalidAddress();
+        address old = payoutTreasury;
+        payoutTreasury = newPayout;
+        emit PayoutTreasuryChanged(old, newPayout);
+    }
+
+    /// @notice Governance override to set member active status.
+    function setMemberActive(uint32 memberId, bool _active) external onlyController {
+        Member storage m = membersById[memberId];
+        if (!m.exists) revert InvalidTarget();
+
+        if (_active && !memberActive[memberId]) {
+            memberActive[memberId] = true;
+            uint224 power = votingPowerOfRank(m.rank);
+            _writeMemberPower(memberId, power);
+            _writeTotalPower(totalVotingPower() + power);
+            emit MemberReactivated(memberId);
+        } else if (!_active && memberActive[memberId]) {
+            memberActive[memberId] = false;
+            uint224 power = votingPowerOfRank(m.rank);
+            _writeMemberPower(memberId, 0);
+            _writeTotalPower(totalVotingPower() - power);
+            emit MemberDeactivated(memberId);
+        }
+    }
+
+    // ================================================================
+    //    FEE-ROUTER-ONLY (called by FeeRouter after collecting payment)
+    // ================================================================
+
+    /// @notice Record a fee payment.  Extends feePaidUntil and reactivates if needed.
+    ///         Only callable by the fee router contract (after it has collected the fee).
+    function recordFeePayment(uint32 memberId) external onlyFeeRouter {
+        Member storage m = membersById[memberId];
+        if (!m.exists) revert InvalidTarget();
+
+        uint64 paidUntil = feePaidUntil[memberId];
+        if (paidUntil < uint64(block.timestamp)) {
+            feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
+        } else {
+            feePaidUntil[memberId] = paidUntil + EPOCH;
+        }
+
+        if (!memberActive[memberId]) {
+            memberActive[memberId] = true;
+            uint224 power = votingPowerOfRank(m.rank);
+            _writeMemberPower(memberId, power);
+            _writeTotalPower(totalVotingPower() + power);
+            emit MemberReactivated(memberId);
+        }
+
+        emit FeePaid(memberId, feePaidUntil[memberId]);
+    }
+
+    // ================================================================
+    //      PERMISSIONLESS FEE ENFORCEMENT
+    // ================================================================
+
+    /// @notice Deactivate a member whose fee has expired (+ grace).  Anyone can call.
+    function deactivateMember(uint32 memberId) external {
+        Member storage m = membersById[memberId];
+        if (!m.exists) revert InvalidTarget();
+        if (!memberActive[memberId]) revert AlreadyInactive();
+        if (block.timestamp <= uint256(feePaidUntil[memberId]) + uint256(gracePeriod))
+            revert MemberNotExpired();
+
+        memberActive[memberId] = false;
+        uint224 power = votingPowerOfRank(m.rank);
+        _writeMemberPower(memberId, 0);
+        _writeTotalPower(totalVotingPower() - power);
+
+        emit MemberDeactivated(memberId);
+    }
+
     // ================================================================
     //     SELF-SERVICE (called by member authorities directly)
     // ================================================================
@@ -335,6 +488,16 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         return id != 0 && membersById[id].exists && membersById[id].authority == who;
     }
 
+    /// @notice Fee for one epoch at a given rank: baseFee × 2^rankIndex.
+    function feeOfRank(Rank r) public view returns (uint256) {
+        return baseFee * (1 << _rankIndex(r));
+    }
+
+    /// @notice Whether a member is currently active.
+    function isMemberActive(uint32 memberId) public view returns (bool) {
+        return memberActive[memberId];
+    }
+
     // ================================================================
     //                    INTERNAL HELPERS
     // ================================================================
@@ -360,19 +523,22 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         Rank old = m.rank;
         if (old == newRank) return;
 
-        uint224 oldP = votingPowerOfRank(old);
-        uint224 newP = votingPowerOfRank(newRank);
         m.rank = newRank;
 
-        _writeMemberPower(memberId, newP);
+        // Only adjust voting power if member is active
+        if (memberActive[memberId]) {
+            uint224 oldP = votingPowerOfRank(old);
+            uint224 newP = votingPowerOfRank(newRank);
+            _writeMemberPower(memberId, newP);
 
-        uint224 total = totalVotingPower();
-        if (newP > oldP) {
-            total += (newP - oldP);
-        } else {
-            total -= (oldP - newP);
+            uint224 total = totalVotingPower();
+            if (newP > oldP) {
+                total += (newP - oldP);
+            } else {
+                total -= (oldP - newP);
+            }
+            _writeTotalPower(total);
         }
-        _writeTotalPower(total);
 
         emit RankChanged(memberId, old, newRank, byMemberId, viaGovernance);
     }
@@ -406,6 +572,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
             joinedAt: uint64(block.timestamp)
         });
         memberIdByAuthority[authority] = id;
+        memberActive[id] = true;
+        feePaidUntil[id] = type(uint64).max;   // bootstrap members never expire
 
         uint224 p = votingPowerOfRank(rank);
         _writeMemberPower(id, p);

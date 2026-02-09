@@ -53,12 +53,31 @@ async function main() {
   await tx.wait();
   console.log("✅ Module linked to Treasury");
 
+  // 7. Wire DAO → Treasury (for fee payment calls)
+  console.log("\n🔗 Setting FeeRouter on DAO...");
+  const FeeRouter = await hre.ethers.getContractFactory("FeeRouter");
+  const feeRouter = await FeeRouter.deploy(daoAddress);
+  await feeRouter.waitForDeployment();
+  const feeRouterAddress = await feeRouter.getAddress();
+  console.log("✅ FeeRouter deployed to:", feeRouterAddress);
+
+  tx = await dao.setFeeRouter(feeRouterAddress);
+  await tx.wait();
+  console.log("✅ DAO feeRouter set to:", feeRouterAddress);
+
+  // 8. Set payout treasury (defaults to main treasury)
+  console.log("\n💸 Setting payout treasury...");
+  tx = await dao.setPayoutTreasury(treasuryAddress);
+  await tx.wait();
+  console.log("✅ Payout treasury set to:", treasuryAddress);
+
   console.log("\n🎉 Deployment complete!");
   console.log("======================================");
   console.log("RankedMembershipDAO:  ", daoAddress);
   console.log("GovernanceController: ", governanceAddress);
   console.log("TreasurerModule:      ", moduleAddress);
   console.log("MembershipTreasury:   ", treasuryAddress);
+  console.log("FeeRouter:            ", feeRouterAddress);
   console.log("======================================");
 
   // Verify on live networks
@@ -68,6 +87,7 @@ async function main() {
     await governance.deploymentTransaction().wait(5);
     await treasurerModule.deploymentTransaction().wait(5);
     await treasury.deploymentTransaction().wait(5);
+    await feeRouter.deploymentTransaction().wait(5);
 
     console.log("\n🔍 Verifying contracts on Arbiscan...");
 
@@ -76,6 +96,7 @@ async function main() {
       ["GovernanceController", governanceAddress, [daoAddress]],
       ["TreasurerModule", moduleAddress, [daoAddress]],
       ["MembershipTreasury", treasuryAddress, [daoAddress]],
+      ["FeeRouter", feeRouterAddress, [daoAddress]],
     ]) {
       try {
         await hre.run("verify:verify", { address: addr, constructorArguments: args });

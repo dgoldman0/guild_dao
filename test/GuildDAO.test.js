@@ -38,7 +38,7 @@ const PType = {
 };
 
 describe("Guild DAO System", function () {
-  let dao, governance, treasurerModule, treasury;
+  let dao, governance, treasurerModule, treasury, feeRouter;
   let owner, member1, member2, outsider, extra1, extra2, extra3;
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
@@ -111,6 +111,13 @@ describe("Guild DAO System", function () {
 
     await treasury.setTreasurerModule(await treasurerModule.getAddress());
     await treasurerModule.setTreasury(await treasury.getAddress());
+
+    const FeeRouter = await ethers.getContractFactory("FeeRouter");
+    feeRouter = await FeeRouter.deploy(await dao.getAddress());
+    await feeRouter.waitForDeployment();
+
+    await dao.setFeeRouter(await feeRouter.getAddress());
+    await dao.setPayoutTreasury(await treasury.getAddress());
   });
 
   // ══════════════════════════════════════════════════════════
@@ -122,6 +129,7 @@ describe("Guild DAO System", function () {
       expect(await governance.getAddress()).to.be.properAddress;
       expect(await treasurerModule.getAddress()).to.be.properAddress;
       expect(await treasury.getAddress()).to.be.properAddress;
+      expect(await feeRouter.getAddress()).to.be.properAddress;
     });
 
     it("links controller to DAO", async function () {
@@ -131,6 +139,11 @@ describe("Guild DAO System", function () {
     it("links treasury ↔ module", async function () {
       expect(await treasury.treasurerModule()).to.equal(await treasurerModule.getAddress());
       expect(await treasurerModule.treasury()).to.equal(await treasury.getAddress());
+    });
+
+    it("links feeRouter + payoutTreasury on DAO", async function () {
+      expect(await dao.feeRouter()).to.equal(await feeRouter.getAddress());
+      expect(await dao.payoutTreasury()).to.equal(await treasury.getAddress());
     });
 
     it("owner is SSS member #1", async function () {
@@ -939,6 +952,355 @@ describe("Guild DAO System", function () {
   });
 
   // ══════════════════════════════════════════════════════════
+  //  Membership Fees (FeeRouter + DAO active/inactive)
+  // ══════════════════════════════════════════════════════════
+  describe("Membership Fees", function () {
+    const EPOCH = 100 * 86400; // 100 days in seconds
+
+    describe("Bootstrap members", function () {
+      it("bootstrap members start active with feePaidUntil = max", async function () {
+        expect(await dao.isMemberActive(1)).to.be.true;
+        expect(await dao.feePaidUntil(1)).to.equal(ethers.MaxUint256 >> 192n); // type(uint64).max
+      });
+
+      it("bootstrap members cannot be deactivated (never expire)", async function () {
+        await ethers.provider.send("evm_increaseTime", [EPOCH * 10]);
+        await ethers.provider.send("evm_mine");
+        await expect(
+          dao.deactivateMember(1)
+        ).to.be.revertedWithCustomError(dao, "MemberNotExpired");
+      });
+    });
+
+    describe("Invited members", function () {
+      it("new invited member starts active with 1 free epoch", async function () {
+        const m1Id = await inviteAndAccept(owner, member1);
+        expect(await dao.isMemberActive(m1Id)).to.be.true;
+        const paidUntil = await dao.feePaidUntil(m1Id);
+        const now = (await ethers.provider.getBlock("latest")).timestamp;
+        // paidUntil should be ~now + EPOCH
+        expect(paidUntil).to.be.closeTo(now + EPOCH, 5);
+      });
+    });
+
+    describe("Fee payment (ETH)", function () {
+      let m1Id;
+
+      beforeEach(async function () {
+        // Set baseFee to 0.001 ether (ETH mode, feeToken = address(0))
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        m1Id = await inviteAndAccept(owner, member1);
+      });
+
+      it("pay fee extends feePaidUntil by one EPOCH", async function () {
+        const paidBefore = await dao.feePaidUntil(m1Id);
+        const fee = await dao.feeOfRank(Rank.G); // baseFee * 2^0 = 0.001 ETH
+        await feeRouter.connect(member1).payMembershipFee(m1Id, { value: fee });
+        const paidAfter = await dao.feePaidUntil(m1Id);
+        expect(paidAfter - paidBefore).to.equal(EPOCH);
+      });
+
+      it("fee scales by rank (G=1x, F=2x)", async function () {
+        const feeG = await dao.feeOfRank(Rank.G);
+        const feeF = await dao.feeOfRank(Rank.F);
+        expect(feeF).to.equal(feeG * 2n);
+      });
+
+      it("wrong ETH amount reverts", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        await expect(
+          feeRouter.connect(member1).payMembershipFee(m1Id, { value: fee + 1n })
+        ).to.be.revertedWithCustomError(feeRouter, "IncorrectFeeAmount");
+      });
+
+      it("anyone can pay on behalf of another member", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        await feeRouter.connect(outsider).payMembershipFee(m1Id, { value: fee });
+        // just check it didn't revert — fee recorded
+        const paidUntil = await dao.feePaidUntil(m1Id);
+        const now = (await ethers.provider.getBlock("latest")).timestamp;
+        expect(paidUntil).to.be.closeTo(now + 2 * EPOCH, 5);
+      });
+
+      it("fee revenue lands in payoutTreasury", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        const balBefore = await ethers.provider.getBalance(await treasury.getAddress());
+        await feeRouter.connect(member1).payMembershipFee(m1Id, { value: fee });
+        const balAfter = await ethers.provider.getBalance(await treasury.getAddress());
+        expect(balAfter - balBefore).to.equal(fee);
+      });
+
+      it("emits MembershipFeePaid event", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        await expect(
+          feeRouter.connect(member1).payMembershipFee(m1Id, { value: fee })
+        ).to.emit(feeRouter, "MembershipFeePaid");
+      });
+    });
+
+    describe("Fee payment (ERC20)", function () {
+      let m1Id, token;
+
+      beforeEach(async function () {
+        const MockERC20 = await ethers.getContractFactory("MockERC20");
+        token = await MockERC20.deploy("FeeToken", "FEE");
+        await token.waitForDeployment();
+
+        // Configure ERC20 fee mode
+        await dao.setFeeToken(await token.getAddress());
+        await dao.setBaseFee(ethers.parseUnits("10", 18)); // 10 FEE tokens base
+        m1Id = await inviteAndAccept(owner, member1);
+      });
+
+      it("pays fee in ERC20 and extends epoch", async function () {
+        const fee = await dao.feeOfRank(Rank.G); // 10 * 1 = 10 FEE
+        await token.mint(member1.address, fee);
+        await token.connect(member1).approve(await feeRouter.getAddress(), fee);
+
+        const paidBefore = await dao.feePaidUntil(m1Id);
+        await feeRouter.connect(member1).payMembershipFee(m1Id);
+        const paidAfter = await dao.feePaidUntil(m1Id);
+        expect(paidAfter - paidBefore).to.equal(EPOCH);
+      });
+
+      it("ERC20 fee revenue lands in payoutTreasury", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        await token.mint(member1.address, fee);
+        await token.connect(member1).approve(await feeRouter.getAddress(), fee);
+
+        await feeRouter.connect(member1).payMembershipFee(m1Id);
+        expect(await token.balanceOf(await treasury.getAddress())).to.equal(fee);
+      });
+
+      it("sending ETH with ERC20 fee reverts", async function () {
+        const fee = await dao.feeOfRank(Rank.G);
+        await token.mint(member1.address, fee);
+        await token.connect(member1).approve(await feeRouter.getAddress(), fee);
+
+        await expect(
+          feeRouter.connect(member1).payMembershipFee(m1Id, { value: 1 })
+        ).to.be.revertedWithCustomError(feeRouter, "IncorrectFeeAmount");
+      });
+    });
+
+    describe("Deactivation & reactivation", function () {
+      let m1Id;
+
+      beforeEach(async function () {
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        m1Id = await inviteAndAccept(owner, member1);
+      });
+
+      it("deactivateMember reverts if fee not expired", async function () {
+        await expect(
+          dao.deactivateMember(m1Id)
+        ).to.be.revertedWithCustomError(dao, "MemberNotExpired");
+      });
+
+      it("deactivateMember succeeds after epoch expires (gracePeriod=0)", async function () {
+        // advance past the free epoch
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+
+        await expect(dao.deactivateMember(m1Id))
+          .to.emit(dao, "MemberDeactivated").withArgs(m1Id);
+        expect(await dao.isMemberActive(m1Id)).to.be.false;
+      });
+
+      it("inactive member has 0 voting power", async function () {
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+        expect(await dao.votingPowerOfMember(m1Id)).to.equal(0);
+      });
+
+      it("total voting power decreases on deactivation", async function () {
+        const totalBefore = await dao.totalVotingPower();
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+        const totalAfter = await dao.totalVotingPower();
+        expect(totalBefore - totalAfter).to.equal(1n); // G rank = power 1
+      });
+
+      it("cannot deactivate already-inactive member", async function () {
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+        await expect(
+          dao.deactivateMember(m1Id)
+        ).to.be.revertedWithCustomError(dao, "AlreadyInactive");
+      });
+
+      it("paying fee reactivates an inactive member", async function () {
+        // expire and deactivate
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+        expect(await dao.isMemberActive(m1Id)).to.be.false;
+        expect(await dao.votingPowerOfMember(m1Id)).to.equal(0);
+
+        // pay fee via feeRouter
+        const fee = await dao.feeOfRank(Rank.G);
+        await expect(
+          feeRouter.connect(member1).payMembershipFee(m1Id, { value: fee })
+        ).to.emit(dao, "MemberReactivated").withArgs(m1Id);
+
+        expect(await dao.isMemberActive(m1Id)).to.be.true;
+        expect(await dao.votingPowerOfMember(m1Id)).to.equal(1n);
+      });
+
+      it("rank change on inactive member does not affect voting power", async function () {
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+
+        const totalBefore = await dao.totalVotingPower();
+        // promote via governance proposal
+        await governance.connect(owner).createProposalGrantRank(m1Id, Rank.A);
+        const propId = (await governance.nextProposalId()) - 1n;
+        await governance.connect(owner).castVote(propId, true);
+        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await governance.connect(owner).finalizeProposal(propId);
+
+        // rank changed but power still 0
+        expect((await dao.getMember(m1Id)).rank).to.equal(Rank.A);
+        expect(await dao.votingPowerOfMember(m1Id)).to.equal(0);
+        expect(await dao.totalVotingPower()).to.equal(totalBefore);
+      });
+    });
+
+    describe("Grace period", function () {
+      let m1Id;
+
+      beforeEach(async function () {
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        await dao.setGracePeriod(7 * 86400); // 7 days grace
+        m1Id = await inviteAndAccept(owner, member1);
+      });
+
+      it("cannot deactivate during grace period", async function () {
+        // advance past epoch but within grace
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 86400]); // epoch+1day
+        await ethers.provider.send("evm_mine");
+        await expect(
+          dao.deactivateMember(m1Id)
+        ).to.be.revertedWithCustomError(dao, "MemberNotExpired");
+      });
+
+      it("can deactivate after epoch + grace", async function () {
+        await ethers.provider.send("evm_increaseTime", [EPOCH + 7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await dao.deactivateMember(m1Id);
+        expect(await dao.isMemberActive(m1Id)).to.be.false;
+      });
+    });
+
+    describe("Fee config setters", function () {
+      it("owner can set baseFee during bootstrap", async function () {
+        await dao.setBaseFee(ethers.parseEther("0.01"));
+        expect(await dao.baseFee()).to.equal(ethers.parseEther("0.01"));
+      });
+
+      it("owner can set feeToken during bootstrap", async function () {
+        await dao.setFeeToken(member1.address); // any address
+        expect(await dao.feeToken()).to.equal(member1.address);
+      });
+
+      it("owner can set gracePeriod during bootstrap", async function () {
+        await dao.setGracePeriod(86400);
+        expect(await dao.gracePeriod()).to.equal(86400);
+      });
+
+      it("owner can set payoutTreasury during bootstrap", async function () {
+        await dao.setPayoutTreasury(member1.address);
+        expect(await dao.payoutTreasury()).to.equal(member1.address);
+      });
+
+      it("outsider cannot set fee config", async function () {
+        await expect(
+          dao.connect(outsider).setBaseFee(1)
+        ).to.be.revertedWithCustomError(dao, "NotController");
+        await expect(
+          dao.connect(outsider).setFeeToken(outsider.address)
+        ).to.be.revertedWithCustomError(dao, "NotController");
+        await expect(
+          dao.connect(outsider).setGracePeriod(1)
+        ).to.be.revertedWithCustomError(dao, "NotController");
+        await expect(
+          dao.connect(outsider).setPayoutTreasury(outsider.address)
+        ).to.be.revertedWithCustomError(dao, "NotController");
+      });
+
+      it("payoutTreasury rejects zero address", async function () {
+        await expect(
+          dao.setPayoutTreasury(ethers.ZeroAddress)
+        ).to.be.revertedWithCustomError(dao, "InvalidAddress");
+      });
+    });
+
+    describe("FeeRouter edge cases", function () {
+      it("reverts for non-existent member", async function () {
+        await dao.setBaseFee(ethers.parseEther("0.001"));
+        await expect(
+          feeRouter.payMembershipFee(999, { value: ethers.parseEther("0.001") })
+        ).to.be.revertedWithCustomError(feeRouter, "NotMember");
+      });
+
+      it("reverts when baseFee is 0 (fee not configured)", async function () {
+        const m1Id = await inviteAndAccept(owner, member1);
+        // baseFee defaults to 0
+        await expect(
+          feeRouter.payMembershipFee(m1Id)
+        ).to.be.revertedWithCustomError(feeRouter, "FeeNotConfigured");
+      });
+
+      it("reverts when payoutTreasury is not set", async function () {
+        // deploy fresh DAO+FeeRouter without payoutTreasury set
+        const DAO2 = await ethers.getContractFactory("RankedMembershipDAO");
+        const dao2 = await DAO2.deploy();
+        await dao2.waitForDeployment();
+        const FR2 = await ethers.getContractFactory("FeeRouter");
+        const fr2 = await FR2.deploy(await dao2.getAddress());
+        await fr2.waitForDeployment();
+        await dao2.setFeeRouter(await fr2.getAddress());
+        await dao2.setBaseFee(ethers.parseEther("0.001"));
+        // payoutTreasury is still address(0)
+        await expect(
+          fr2.payMembershipFee(1, { value: ethers.parseEther("0.001") })
+        ).to.be.revertedWithCustomError(fr2, "PayoutTreasuryNotSet");
+      });
+    });
+
+    describe("setMemberActive (governance override)", function () {
+      it("controller can force-deactivate a member", async function () {
+        // We need to call dao.setMemberActive via controller (governance).
+        // For simplicity, use a fresh DAO where owner IS the controller.
+        const DAO2 = await ethers.getContractFactory("RankedMembershipDAO");
+        const dao2 = await DAO2.deploy();
+        await dao2.waitForDeployment();
+        // owner is still owner, set controller to owner for direct calls
+        await dao2.setController(owner.address);
+        await dao2.setMemberActive(1, false);
+        expect(await dao2.isMemberActive(1)).to.be.false;
+        expect(await dao2.votingPowerOfMember(1)).to.equal(0);
+      });
+
+      it("controller can force-reactivate a member", async function () {
+        const DAO2 = await ethers.getContractFactory("RankedMembershipDAO");
+        const dao2 = await DAO2.deploy();
+        await dao2.waitForDeployment();
+        await dao2.setController(owner.address);
+        await dao2.setMemberActive(1, false);
+        await dao2.setMemberActive(1, true);
+        expect(await dao2.isMemberActive(1)).to.be.true;
+        expect(await dao2.votingPowerOfMember(1)).to.equal(512n); // SSS
+      });
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
   //  Cross-contract Security
   // ══════════════════════════════════════════════════════════
   describe("Cross-contract Security", function () {
@@ -967,6 +1329,12 @@ describe("Guild DAO System", function () {
       await expect(
         treasurerModule.connect(outsider).executeTreasurerAction(AT.ADD_MEMBER_TREASURER, "0x")
       ).to.be.revertedWithCustomError(treasurerModule, "NotTreasury");
+    });
+
+    it("outsider cannot call recordFeePayment on DAO (onlyFeeRouter)", async function () {
+      await expect(
+        dao.connect(outsider).recordFeePayment(1)
+      ).to.be.revertedWithCustomError(dao, "NotFeeRouter");
     });
   });
 });

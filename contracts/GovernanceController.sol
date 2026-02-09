@@ -230,7 +230,7 @@ contract GovernanceController is ReentrancyGuard {
     }
 
     function _currentEpoch() internal view returns (uint64) {
-        return uint64(block.timestamp / dao.INVITE_EPOCH());
+        return uint64(block.timestamp / dao.EPOCH());
     }
 
     function _enforceOrderLimit(uint32 issuerId, RankedMembershipDAO.Rank issuerRank) internal view {

@@ -31,4 +31,14 @@ interface IRankedMembershipDAO {
     function votingPeriod() external view returns (uint64);
     function quorumBps() external view returns (uint16);
     function executionDelay() external view returns (uint64);
+
+    // Fee system
+    function EPOCH() external view returns (uint64);
+    function feeToken() external view returns (address);
+    function baseFee() external view returns (uint256);
+    function feeOfRank(Rank r) external view returns (uint256);
+    function feePaidUntil(uint32 memberId) external view returns (uint64);
+    function isMemberActive(uint32 memberId) external view returns (bool);
+    function payoutTreasury() external view returns (address);
+    function recordFeePayment(uint32 memberId) external;
 }
