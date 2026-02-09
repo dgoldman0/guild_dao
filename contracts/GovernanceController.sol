@@ -4,17 +4,18 @@ pragma solidity ^0.8.24;
 /*
     GovernanceController — Governance logic for the RankedMembershipDAO.
 
-    Holds all stateful governance features:
-      - Invite system (issue, accept, reclaim)
+    Holds stateful governance features:
       - Timelocked orders (promote, demote, authority change) with veto/block
       - Governance proposals (rank change, authority change, parameter change,
-        order blocking, ERC20 recovery)
+        order blocking, ERC20 recovery, bootstrap fee reset)
       - Voting (snapshot-based)
       - Proposal finalization and execution
 
+    Invite logic lives in InviteController.sol (separate contract).
+
     This contract is set as the `controller` on the DAO, giving it exclusive
-    authority to call setRank(), setAuthority(), addMember(), and the
-    governance parameter setters.
+    authority to call setRank(), setAuthority(), and the governance
+    parameter setters.
 */
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -45,11 +46,6 @@ contract GovernanceController is ReentrancyGuard {
     error PendingActionExists();
     error NoPendingAction();
     error NotAuthorizedAuthority();
-    error InviteExpired();
-    error InviteNotFound();
-    error InviteAlreadyClaimed();
-    error InviteAlreadyReclaimed();
-    error InviteNotYetExpired();
     error ProposalNotFound();
     error ProposalNotActive();
     error ProposalEnded();
@@ -68,28 +64,6 @@ contract GovernanceController is ReentrancyGuard {
     error TooManyActiveOrders();
     error InvalidParameterValue();
     error ParameterOutOfBounds();
-
-    // ================================================================
-    //                         INVITES
-    // ================================================================
-
-    struct Invite {
-        bool exists;
-        uint64 inviteId;
-        uint32 issuerId;
-        address to;
-        uint64 issuedAt;
-        uint64 expiresAt;
-        uint64 epoch;
-        bool claimed;
-        bool reclaimed;
-    }
-
-    uint64 public nextInviteId = 1;
-    mapping(uint64 => Invite) public invitesById;
-
-    // issuerId => epoch => invitesUsed
-    mapping(uint32 => mapping(uint64 => uint16)) public invitesUsedByEpoch;
 
     // ================================================================
     //                    TIMELOCKED ORDERS
@@ -180,11 +154,6 @@ contract GovernanceController is ReentrancyGuard {
     //                          EVENTS
     // ================================================================
 
-    // Invite events
-    event InviteIssued(uint64 indexed inviteId, uint32 indexed issuerId, address indexed to, uint64 expiresAt, uint64 epoch);
-    event InviteClaimed(uint64 indexed inviteId, uint32 indexed newMemberId, address indexed authority);
-    event InviteReclaimed(uint64 indexed inviteId, uint32 indexed issuerId);
-
     // Order events
     event OrderCreated(uint64 indexed orderId, OrderType orderType, uint32 indexed issuerId, uint32 indexed targetId, RankedMembershipDAO.Rank newRank, address newAuthority, uint64 executeAfter);
     event OrderBlocked(uint64 indexed orderId, uint32 indexed blockerId);
@@ -230,10 +199,6 @@ contract GovernanceController is ReentrancyGuard {
         if (pendingOrderOfTarget[targetId] != 0) revert PendingActionExists();
     }
 
-    function _currentEpoch() internal view returns (uint64) {
-        return uint64(block.timestamp / dao.EPOCH());
-    }
-
     function _enforceOrderLimit(uint32 issuerId, RankedMembershipDAO.Rank issuerRank) internal view {
         uint8 limit = dao.orderLimitOfRank(issuerRank);
         if (limit == 0) revert RankTooLow();
@@ -262,81 +227,6 @@ contract GovernanceController is ReentrancyGuard {
     function _memberExists(uint32 memberId) internal view returns (bool) {
         (bool exists,,,,) = dao.membersById(memberId);
         return exists;
-    }
-
-    // ================================================================
-    //                         INVITES
-    // ================================================================
-
-    function issueInvite(address to) external nonReentrant returns (uint64 inviteId) {
-        if (to == address(0)) revert InvalidAddress();
-
-        (uint32 issuerId, RankedMembershipDAO.Rank issuerRank) = _requireMember(msg.sender);
-
-        // prevent inviting an existing authority
-        if (dao.memberIdByAuthority(to) != 0) revert AlreadyMember();
-
-        uint64 epoch = _currentEpoch();
-        uint16 used = invitesUsedByEpoch[issuerId][epoch];
-        uint16 allowance = dao.inviteAllowanceOfRank(issuerRank);
-        if (used >= allowance) revert NotEnoughRank();
-
-        invitesUsedByEpoch[issuerId][epoch] = used + 1;
-
-        inviteId = nextInviteId++;
-        uint64 issuedAt = uint64(block.timestamp);
-        uint64 expiresAt = issuedAt + dao.inviteExpiry();
-
-        invitesById[inviteId] = Invite({
-            exists: true,
-            inviteId: inviteId,
-            issuerId: issuerId,
-            to: to,
-            issuedAt: issuedAt,
-            expiresAt: expiresAt,
-            epoch: epoch,
-            claimed: false,
-            reclaimed: false
-        });
-
-        emit InviteIssued(inviteId, issuerId, to, expiresAt, epoch);
-    }
-
-    function acceptInvite(uint64 inviteId) external nonReentrant returns (uint32 newMemberId) {
-        Invite storage inv = invitesById[inviteId];
-        if (!inv.exists) revert InviteNotFound();
-        if (inv.claimed) revert InviteAlreadyClaimed();
-        if (inv.reclaimed) revert InviteAlreadyReclaimed();
-        if (block.timestamp > inv.expiresAt) revert InviteExpired();
-        if (inv.to != msg.sender) revert InvalidAddress();
-        if (dao.memberIdByAuthority(msg.sender) != 0) revert AlreadyMember();
-
-        inv.claimed = true;
-
-        // Create member via DAO
-        newMemberId = dao.addMember(msg.sender);
-
-        emit InviteClaimed(inviteId, newMemberId, msg.sender);
-    }
-
-    function reclaimExpiredInvite(uint64 inviteId) external nonReentrant {
-        Invite storage inv = invitesById[inviteId];
-        if (!inv.exists) revert InviteNotFound();
-        if (inv.claimed) revert InviteAlreadyClaimed();
-        if (inv.reclaimed) revert InviteAlreadyReclaimed();
-        if (block.timestamp <= inv.expiresAt) revert InviteNotYetExpired();
-
-        uint32 issuerId = _requireMemberAuthority(msg.sender);
-        if (issuerId != inv.issuerId) revert InvalidTarget();
-
-        inv.reclaimed = true;
-
-        uint16 used = invitesUsedByEpoch[issuerId][inv.epoch];
-        if (used > 0) {
-            invitesUsedByEpoch[issuerId][inv.epoch] = used - 1;
-        }
-
-        emit InviteReclaimed(inviteId, issuerId);
     }
 
     // ================================================================
@@ -889,10 +779,6 @@ contract GovernanceController is ReentrancyGuard {
     // ================================================================
     //                      VIEW FUNCTIONS
     // ================================================================
-
-    function getInvite(uint64 inviteId) external view returns (Invite memory) {
-        return invitesById[inviteId];
-    }
 
     function getOrder(uint64 orderId) external view returns (PendingOrder memory) {
         return ordersById[orderId];

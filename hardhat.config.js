@@ -9,15 +9,15 @@ module.exports = {
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200
+        runs: 1  // Lower runs = optimize for deployment size
       },
       viaIR: true
     }
   },
   networks: {
     hardhat: {
-      chainId: 31337,
-      allowUnlimitedContractSize: true
+      chainId: 31337
+      // allowUnlimitedContractSize removed for production readiness check
     },
     arbitrumSepolia: {
       url: process.env.ARBITRUM_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { BrowserProvider, Contract } from "ethers";
-import { DAO_ABI, GOVERNANCE_ABI, TREASURY_ABI, FEE_ROUTER_ABI } from "../contracts/abis";
+import { DAO_ABI, GOVERNANCE_ABI, INVITE_CONTROLLER_ABI, TREASURY_ABI, FEE_ROUTER_ABI } from "../contracts/abis";
 import { getAddresses } from "../contracts/config";
 import { EPOCH_SECONDS } from "../lib/constants";
 import { decodeContractError } from "../lib/errors";
@@ -21,6 +21,7 @@ export function Web3Provider({ children }) {
   // ── Contracts ────────────────────────────────
   const [dao, setDao] = useState(null);
   const [governance, setGovernance] = useState(null);
+  const [inviteController, setInviteController] = useState(null);
   const [treasury, setTreasury] = useState(null);
   const [feeRouter, setFeeRouter] = useState(null);
 
@@ -92,6 +93,7 @@ export function Web3Provider({ children }) {
     setProvider(null);
     setDao(null);
     setGovernance(null);
+    setInviteController(null);
     setTreasury(null);
     setFeeRouter(null);
     setMyMemberId(0);
@@ -130,6 +132,9 @@ export function Web3Provider({ children }) {
     try {
       setDao(new Contract(addrs.dao, DAO_ABI, signer));
       setGovernance(new Contract(addrs.governance, GOVERNANCE_ABI, signer));
+      setInviteController(addrs.inviteController && addrs.inviteController !== zero
+        ? new Contract(addrs.inviteController, INVITE_CONTROLLER_ABI, signer)
+        : null);
       setTreasury(new Contract(addrs.treasury, TREASURY_ABI, signer));
       setFeeRouter(new Contract(addrs.feeRouter, FEE_ROUTER_ABI, signer));
       setError(null);
@@ -246,6 +251,7 @@ export function Web3Provider({ children }) {
       signer,
       dao,
       governance,
+      inviteController,
       treasury,
       feeRouter,
       myMemberId,
@@ -267,7 +273,7 @@ export function Web3Provider({ children }) {
     }),
     [
       account, chainId, provider, signer,
-      dao, governance, treasury, feeRouter,
+      dao, governance, inviteController, treasury, feeRouter,
       myMemberId, myMember, myPower, myActive, myFeePaidUntil,
       daoState, loading, error, toast,
       connect, disconnect, refresh, sendTx, showToast,

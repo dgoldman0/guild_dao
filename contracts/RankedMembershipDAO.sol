@@ -114,6 +114,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     error MemberNotExpired();
     error AlreadyInactive();
     error NotBootstrapMember();
+    error BootstrapMemberFeeExempt();
 
     // ================================================================
     //                        MEMBERSHIP
@@ -171,12 +172,19 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     // ================================================================
+    //                   INVITE CONTROLLER (for invite-based addMember)
+    // ================================================================
+
+    address public inviteController;
+
+    // ================================================================
     //                          EVENTS
     // ================================================================
 
     event BootstrapMember(uint32 indexed memberId, address indexed authority, Rank rank);
     event BootstrapFinalized();
     event ControllerSet(address indexed controller);
+    event InviteControllerSet(address indexed inviteController);
 
     event MemberJoined(uint32 indexed memberId, address indexed authority, Rank rank);
     event AuthorityChanged(
@@ -253,6 +261,15 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit FeeRouterSet(_feeRouter);
     }
 
+    /// @notice Set the InviteController address (authorized to call addMember for invites).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setInviteController(address _inviteController) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        if (_inviteController == address(0)) revert InvalidAddress();
+        inviteController = _inviteController;
+        emit InviteControllerSet(_inviteController);
+    }
+
     // ================================================================
     //      CONTROLLER-ONLY MUTATIONS (called by GovernanceController)
     // ================================================================
@@ -273,9 +290,11 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         _setAuthority(memberId, newAuthority, byMemberId, viaGovernance);
     }
 
-    /// @notice Register a new member at rank G. Only callable by the controller (invite flow).
+    /// @notice Register a new member at rank G.
+    ///         Callable by the controller (governance) or the inviteController (invite flow).
     /// @return newMemberId The ID of the newly created member.
-    function addMember(address authority) external onlyController returns (uint32 newMemberId) {
+    function addMember(address authority) external returns (uint32 newMemberId) {
+        if (msg.sender != controller && msg.sender != inviteController) revert NotController();
         if (authority == address(0)) revert InvalidAddress();
         if (memberIdByAuthority[authority] != 0) revert AlreadyMember();
 
@@ -419,10 +438,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         if (!m.exists) revert InvalidTarget();
 
         uint64 paidUntil = feePaidUntil[memberId];
-        if (paidUntil == type(uint64).max) {
-            // Bootstrap member paying voluntarily — reset sentinel
-            feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
-        } else if (paidUntil < uint64(block.timestamp)) {
+        if (paidUntil == type(uint64).max) revert BootstrapMemberFeeExempt();
+        if (paidUntil < uint64(block.timestamp)) {
             feePaidUntil[memberId] = uint64(block.timestamp) + EPOCH;
         } else {
             feePaidUntil[memberId] = paidUntil + EPOCH;

@@ -38,15 +38,15 @@ const PType = {
 };
 
 describe("Guild DAO System", function () {
-  let dao, governance, treasurerModule, treasury, feeRouter;
+  let dao, governance, inviteController, treasurerModule, treasury, feeRouter;
   let owner, member1, member2, outsider, extra1, extra2, extra3;
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
   // ─── Utility helpers ──────────────────────────────────────
   async function inviteAndAccept(inviter, inviteeWallet) {
-    await governance.connect(inviter).issueInvite(inviteeWallet.address);
-    const inviteId = (await governance.nextInviteId()) - 1n;
-    await governance.connect(inviteeWallet).acceptInvite(inviteId);
+    await inviteController.connect(inviter).issueInvite(inviteeWallet.address);
+    const inviteId = (await inviteController.nextInviteId()) - 1n;
+    await inviteController.connect(inviteeWallet).acceptInvite(inviteId);
     return await dao.memberIdByAuthority(inviteeWallet.address);
   }
 
@@ -118,15 +118,22 @@ describe("Guild DAO System", function () {
 
     await dao.setFeeRouter(await feeRouter.getAddress());
     await dao.setPayoutTreasury(await treasury.getAddress());
+
+    const InviteController = await ethers.getContractFactory("InviteController");
+    inviteController = await InviteController.deploy(await dao.getAddress());
+    await inviteController.waitForDeployment();
+
+    await dao.setInviteController(await inviteController.getAddress());
   });
 
   // ══════════════════════════════════════════════════════════
   //  Deployment
   // ══════════════════════════════════════════════════════════
   describe("Deployment", function () {
-    it("deploys all four contracts", async function () {
+    it("deploys all contracts including InviteController", async function () {
       expect(await dao.getAddress()).to.be.properAddress;
       expect(await governance.getAddress()).to.be.properAddress;
+      expect(await inviteController.getAddress()).to.be.properAddress;
       expect(await treasurerModule.getAddress()).to.be.properAddress;
       expect(await treasury.getAddress()).to.be.properAddress;
       expect(await feeRouter.getAddress()).to.be.properAddress;
@@ -134,6 +141,10 @@ describe("Guild DAO System", function () {
 
     it("links controller to DAO", async function () {
       expect(await dao.controller()).to.equal(await governance.getAddress());
+    });
+
+    it("links inviteController to DAO", async function () {
+      expect(await dao.inviteController()).to.equal(await inviteController.getAddress());
     });
 
     it("links treasury ↔ module", async function () {
@@ -338,8 +349,8 @@ describe("Guild DAO System", function () {
   // ══════════════════════════════════════════════════════════
   describe("Invites", function () {
     it("SSS member can issue an invite", async function () {
-      await governance.connect(owner).issueInvite(member1.address);
-      const inv = await governance.getInvite(1);
+      await inviteController.connect(owner).issueInvite(member1.address);
+      const inv = await inviteController.getInvite(1);
       expect(inv.exists).to.be.true;
       expect(inv.to).to.equal(member1.address);
     });
@@ -351,54 +362,54 @@ describe("Guild DAO System", function () {
     });
 
     it("non-invited address cannot accept", async function () {
-      await governance.connect(owner).issueInvite(member1.address);
+      await inviteController.connect(owner).issueInvite(member1.address);
       await expect(
-        governance.connect(member2).acceptInvite(1)
-      ).to.be.revertedWithCustomError(governance, "InvalidAddress");
+        inviteController.connect(member2).acceptInvite(1)
+      ).to.be.revertedWithCustomError(inviteController, "InvalidAddress");
     });
 
     it("cannot accept same invite twice", async function () {
-      await governance.connect(owner).issueInvite(member1.address);
-      await governance.connect(member1).acceptInvite(1);
+      await inviteController.connect(owner).issueInvite(member1.address);
+      await inviteController.connect(member1).acceptInvite(1);
       await expect(
-        governance.connect(member1).acceptInvite(1)
-      ).to.be.revertedWithCustomError(governance, "InviteAlreadyClaimed");
+        inviteController.connect(member1).acceptInvite(1)
+      ).to.be.revertedWithCustomError(inviteController, "InviteAlreadyClaimed");
     });
 
     it("invite expires and can be reclaimed", async function () {
-      await governance.connect(owner).issueInvite(member1.address);
+      await inviteController.connect(owner).issueInvite(member1.address);
       // advance past invite expiry (24h)
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
       // accept fails (expired)
       await expect(
-        governance.connect(member1).acceptInvite(1)
-      ).to.be.revertedWithCustomError(governance, "InviteExpired");
+        inviteController.connect(member1).acceptInvite(1)
+      ).to.be.revertedWithCustomError(inviteController, "InviteExpired");
       // reclaim succeeds
-      await governance.connect(owner).reclaimExpiredInvite(1);
-      const inv = await governance.getInvite(1);
+      await inviteController.connect(owner).reclaimExpiredInvite(1);
+      const inv = await inviteController.getInvite(1);
       expect(inv.reclaimed).to.be.true;
     });
 
     it("cannot reclaim before expiry", async function () {
-      await governance.connect(owner).issueInvite(member1.address);
+      await inviteController.connect(owner).issueInvite(member1.address);
       await expect(
-        governance.connect(owner).reclaimExpiredInvite(1)
-      ).to.be.revertedWithCustomError(governance, "InviteNotYetExpired");
+        inviteController.connect(owner).reclaimExpiredInvite(1)
+      ).to.be.revertedWithCustomError(inviteController, "InviteNotYetExpired");
     });
 
     it("G member cannot issue invites (allowance=0)", async function () {
       await inviteAndAccept(owner, member1);
       await expect(
-        governance.connect(member1).issueInvite(member2.address)
-      ).to.be.revertedWithCustomError(governance, "NotEnoughRank");
+        inviteController.connect(member1).issueInvite(member2.address)
+      ).to.be.revertedWithCustomError(inviteController, "NotEnoughRank");
     });
 
     it("cannot invite an existing member", async function () {
       await inviteAndAccept(owner, member1);
       await expect(
-        governance.connect(owner).issueInvite(member1.address)
-      ).to.be.revertedWithCustomError(governance, "AlreadyMember");
+        inviteController.connect(owner).issueInvite(member1.address)
+      ).to.be.revertedWithCustomError(inviteController, "AlreadyMember");
     });
   });
 
@@ -1300,20 +1311,15 @@ describe("Guild DAO System", function () {
     });
 
     describe("Bootstrap fee reset", function () {
-      it("bootstrap member can voluntarily pay fee — sentinel is cleared", async function () {
+      it("bootstrap member fee payment reverts with BootstrapMemberFeeExempt", async function () {
         // owner (deployer) is bootstrap SSS member #1
         await dao.setBaseFee(ethers.parseEther("0.001"));
         const fee = await dao.feeOfRank(Rank.SSS); // 0.001 * 2^9 = 0.512 ETH
 
         expect(await dao.feePaidUntil(1)).to.equal(ethers.MaxUint256 >> 192n); // sentinel
-        await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
-
-        const paidUntil = await dao.feePaidUntil(1);
-        const now = (await ethers.provider.getBlock("latest")).timestamp;
-        const EPOCH = 100 * 86400;
-        // Should be now + EPOCH, not overflowed
-        expect(paidUntil).to.be.closeTo(now + EPOCH, 5);
-        expect(paidUntil).to.be.lessThan(ethers.MaxUint256 >> 192n);
+        await expect(
+          feeRouter.connect(owner).payMembershipFee(1, { value: fee })
+        ).to.be.revertedWithCustomError(dao, "BootstrapMemberFeeExempt");
       });
 
       it("resetBootstrapFee via governance converts bootstrap to fee-paying", async function () {
@@ -1390,16 +1396,27 @@ describe("Guild DAO System", function () {
         ).to.be.revertedWithCustomError(governance, "RankTooLow");
       });
 
-      it("second fee payment after sentinel reset extends normally", async function () {
+      it("second fee payment after governance reset extends normally", async function () {
         await dao.setBaseFee(ethers.parseEther("0.001"));
         const fee = await dao.feeOfRank(Rank.SSS);
         const EPOCH = 100 * 86400;
 
-        // First payment resets sentinel
+        // Bootstrap member #1 — finalize bootstrap so governance works
+        await dao.finalizeBootstrap();
+
+        // Use governance to reset bootstrap fee for member #1
+        await governance.connect(owner).createProposalResetBootstrapFee(1);
+        const propId = (await governance.nextProposalId()) - 1n;
+        await governance.connect(owner).castVote(propId, true);
+        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await governance.connect(owner).finalizeProposal(propId);
+
+        // First payment extends from now + EPOCH
         await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
         const after1 = await dao.feePaidUntil(1);
 
-        // Second payment extends by EPOCH
+        // Second payment extends by another EPOCH
         await feeRouter.connect(owner).payMembershipFee(1, { value: fee });
         const after2 = await dao.feePaidUntil(1);
 

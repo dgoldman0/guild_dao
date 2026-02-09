@@ -13,7 +13,7 @@ import { ERC20_ABI } from "../contracts/abis";
 
 export default function MyProfile() {
   const {
-    isConnected, isMember, dao, governance, feeRouter, signer,
+    isConnected, isMember, dao, governance, inviteController, feeRouter, signer,
     myMember, myMemberId, myPower, myActive, myFeePaidUntil,
     daoState, account, sendTx, refresh,
   } = useWeb3();
@@ -67,12 +67,12 @@ export default function MyProfile() {
 
   // Load user's invites
   const loadInvites = useCallback(async () => {
-    if (!governance || !myMemberId) return;
+    if (!inviteController || !myMemberId) return;
     try {
-      const nextId = Number(await governance.nextInviteId());
+      const nextId = Number(await inviteController.nextInviteId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getInvite(id).then((inv) => ({ ...resultToObject(inv), _id: id })).catch(() => null)
+          inviteController.getInvite(id).then((inv) => ({ ...resultToObject(inv), _id: id })).catch(() => null)
         )
       );
       setInvites(
@@ -84,7 +84,7 @@ export default function MyProfile() {
     } catch (e) {
       console.error(e);
     }
-  }, [governance, myMemberId]);
+  }, [inviteController, myMemberId]);
 
   useEffect(() => { loadInvites(); }, [loadInvites]);
 
@@ -115,14 +115,14 @@ export default function MyProfile() {
   }
 
   async function handleIssueInvite() {
-    await sendTx("Issue Invite", governance.issueInvite(inviteAddress));
+    await sendTx("Issue Invite", inviteController.issueInvite(inviteAddress));
     setShowInvite(false);
     setInviteAddress("");
     loadInvites();
   }
 
   async function handleReclaimInvite(inviteId) {
-    await sendTx("Reclaim Invite", governance.reclaimExpiredInvite(inviteId));
+    await sendTx("Reclaim Invite", inviteController.reclaimExpiredInvite(inviteId));
     loadInvites();
   }
 

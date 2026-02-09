@@ -36,6 +36,10 @@ const ERROR_CATALOG = {
     title: "Not a Bootstrap Member",
     hint: "This action can only be performed on bootstrap members (those with unlimited fee expiry).",
   },
+  "BootstrapMemberFeeExempt()": {
+    title: "Bootstrap Member — Fee Exempt",
+    hint: "This member was added during bootstrap and is exempt from fees. A governance proposal (ResetBootstrapFee) is required to convert them to fee-paying status first.",
+  },
   "MemberNotExpired()": {
     title: "Member Not Expired",
     hint: "This member's fee hasn't expired yet (including grace period). They can't be deactivated.",

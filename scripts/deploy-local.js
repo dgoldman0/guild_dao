@@ -4,7 +4,7 @@ const hre = require("hardhat");
   deploy-local.js  —  Full local deploy + populate for frontend testing.
 
   Boots a Hardhat-node world with:
-    • All 5 contracts deployed & wired
+    • All 6 contracts deployed & wired
     • User's real address bootstrapped as SSS
     • 8 additional members at various ranks (using Hardhat signers)
     • Fee config enabled (ETH, 0.01 ETH base, 7-day grace)
@@ -62,6 +62,13 @@ async function main() {
   const feeRouterAddr = await feeRouter.getAddress();
   console.log("   ✅", feeRouterAddr);
 
+  console.log("🎟️  Deploying InviteController…");
+  const INV = await hre.ethers.getContractFactory("InviteController");
+  const inviteController = await INV.deploy(daoAddr);
+  await inviteController.waitForDeployment();
+  const inviteControllerAddr = await inviteController.getAddress();
+  console.log("   ✅", inviteControllerAddr);
+
   // ─────────── 2. Wire contracts ───────────
 
   console.log("\n🔗 Wiring contracts…");
@@ -69,6 +76,7 @@ async function main() {
   await (await mod.setTreasury(treasuryAddr)).wait();
   await (await dao.setController(govAddr)).wait();
   await (await dao.setFeeRouter(feeRouterAddr)).wait();
+  await (await dao.setInviteController(inviteControllerAddr)).wait();
   await (await dao.setPayoutTreasury(treasuryAddr)).wait();
   console.log("   ✅ All wired");
 
@@ -125,12 +133,13 @@ async function main() {
   console.log("\n📋 Creating test proposals & orders…");
 
   // SS member (#3, signer[1]) issues an invite to an external address
-  const govAsSS = gov.connect(signers[1]);
-  const tx1 = await govAsSS.issueInvite(signers[10].address);
+  const invAsSS = inviteController.connect(signers[1]);
+  const tx1 = await invAsSS.issueInvite(signers[10].address);
   await tx1.wait();
   console.log("   ✅ Invite #1 issued by SS member to", signers[10].address);
 
   // S member (#4, signer[2]) creates a proposal to promote G member (#11) to F
+  const govAsSS = gov.connect(signers[1]);
   const govAsS = gov.connect(signers[2]);
   const gMemberId = await dao.memberIdByAuthority(signers[9].address); // G member
   const tx2 = await govAsS.createProposalGrantRank(gMemberId, Rank.F);
@@ -184,6 +193,7 @@ async function main() {
   console.log("══════════════════════════════════════════════════════════");
   console.log("  RankedMembershipDAO:  ", daoAddr);
   console.log("  GovernanceController: ", govAddr);
+  console.log("  InviteController:     ", inviteControllerAddr);
   console.log("  TreasurerModule:      ", modAddr);
   console.log("  MembershipTreasury:   ", treasuryAddr);
   console.log("  FeeRouter:            ", feeRouterAddr);
@@ -200,7 +210,7 @@ async function main() {
   console.log("  → Then open the frontend at  http://localhost:5173\n");
 
   // ─────────── Output JSON for easy config patching ───────────
-  const addresses = { dao: daoAddr, governance: govAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
+  const addresses = { dao: daoAddr, governance: govAddr, inviteController: inviteControllerAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
   console.log("ADDRESSES_JSON=" + JSON.stringify(addresses));
 }
 
