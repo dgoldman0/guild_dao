@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ───────────────────────────────────── */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #374151 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+  }
+  body {
+    min-height: 100vh;
+  }
+}
+
+/* ── Utilities ──────────────────────────────── */
+@layer utilities {
+  .text-gold-gradient {
+    background: linear-gradient(135deg, #d4a843, #f0d78c, #d4a843);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .border-gold-glow {
+    box-shadow: 0 0 12px -2px rgba(212, 168, 67, 0.25);
+  }
+  .card {
+    @apply rounded-xl border border-gray-800 bg-gray-900 p-5;
+  }
+  .card-hover {
+    @apply card transition-colors hover:border-gray-700 hover:bg-gray-800/60;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+           text-sm font-medium transition-colors focus:outline-none
+           focus:ring-2 focus:ring-gold-400/40 disabled:cursor-not-allowed
+           disabled:opacity-50;
+  }
+  .btn-gold {
+    @apply btn bg-gold-400 text-gray-950 hover:bg-gold-300;
+  }
+  .btn-outline {
+    @apply btn border border-gray-700 text-gray-300 hover:border-gray-500
+           hover:text-white;
+  }
+  .btn-danger {
+    @apply btn bg-red-600/20 text-red-400 hover:bg-red-600/30;
+  }
+  .btn-success {
+    @apply btn bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30;
+  }
+  .input {
+    @apply w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2
+           text-sm text-gray-100 placeholder-gray-500 focus:border-gold-400
+           focus:outline-none focus:ring-1 focus:ring-gold-400/40;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wider text-gray-400;
+  }
+}
