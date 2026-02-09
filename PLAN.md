@@ -13,74 +13,33 @@ Current architecture: 4 contracts + 1 library + 2 interfaces.
 
 ---
 
-## Stage 1 — Order Limits & Rescind
+## Stage 1 — Order Limits & Rescind ✅
 
-**Goal:** Add per-rank concurrent order limits and the ability for issuers to rescind pending orders early.
+**Commit:** `bb94ccf` — `feat: order limits per rank & rescindOrder`
 
-### 1a. Order Limits
-- Track `activeOrdersOf[memberId]` in GovernanceController.
-- Enforce a per-rank cap (same doubling pattern as invites: `1 << (rankIndex - 1)`, F=1, E=2, D=4 …).
-- Increment on order creation, decrement on execute / block / rescind / expiry.
-
-### 1b. Rescind Orders
-- Add `rescindOrder(uint64 orderId)` — issuer can cancel their own unexecuted, unblocked order.
-- Emits `OrderRescinded(orderId)`, decrements `activeOrdersOf`.
-
-### 1c. Tests
-- Order limit enforcement (at cap → revert, after execute → slot freed).
-- Rescind happy path, rescind by non-issuer reverts, rescind already-executed reverts.
-- blockOrder still works and frees slot.
+- Added `orderLimitOfRank()` to DAO (E=1, D=2, C=4… doubling pattern).
+- Added `activeOrdersOf` tracking in GovernanceController.
+- Enforced per-rank concurrent order cap on all 3 order types.
+- Decremented active count on execute, block, rescind, and governance-block.
+- Added `rescindOrder()` — issuer cancels their own pending order.
+- Consolidated 5 parameter-change proposal functions into `createProposalChangeParameter()`.
+- 13 new tests covering limits and rescind.
 
 ---
 
-## Stage 2 — Comprehensive Test Coverage (existing features)
+## Stage 2 — Comprehensive Test Coverage ✅
 
-**Goal:** Harden the existing codebase with thorough tests before adding new features.
+**Commit:** `1a51e31` — `test: comprehensive test coverage (Stage 2)`
 
-### 2a. RankedMembershipDAO Tests
-- Bootstrap: add multiple members, finalize, verify owner is renounced.
-- Post-bootstrap: bootstrapAddMember reverts.
-- setController by owner, setController by controller (migration), revert for random caller.
-- changeMyAuthority: success, duplicate-address revert, zero-address revert.
-- Pause/unpause: changeMyAuthority blocked while paused.
-- Fund rejection: ETH send reverts, ERC721 safeTransferFrom reverts.
-- Voting power snapshots: promote → check historical power at old block.
-
-### 2b. GovernanceController Tests
-- Invite: full epoch allowance tracking, expiry, reclaim, double-accept revert.
-- Orders: promotion grant, demotion, authority change. Time-delay enforcement. Block by higher-rank.
-- Proposals: each ProposalType (GrantRank, DemoteRank, ChangeAuthority, all 5 parameter types, BlockOrder, TransferERC20).
-- Full vote cycle: propose → castVote → finalizeProposal → verify state mutation.
-- Edge cases: vote after end, double vote, finalize too early, quorum not met.
-
-### 2c. MembershipTreasury Tests
-- propose() for each ActionType constant (0–20).
-- Vote + finalize + execute for TRANSFER_ETH (fund treasury, propose, vote, wait, finalize, execute, verify recipient balance).
-- Vote + finalize + execute for TRANSFER_ERC20 (same pattern with MockERC20).
-- Settings proposals: SET_TREASURY_LOCKED, SET_CALL_ACTIONS_ENABLED.
-- Spend cap enforcement.
-- Revert paths: execute before delay, execute failed proposal, double execute.
-
-### 2d. TreasurerModule Tests
-- Full proposal lifecycle: propose ADD_MEMBER_TREASURER → vote → finalize → execute → verify config.
-- treasurerSpendETH within limit, over limit.
-- treasurerSpendERC20 within limit.
-- Period reset: spend → advance time past period → spend again.
-- treasurerTransferNFT with mock NFT.
-- treasuryLocked blocks spending.
-
----
-
-## Stage 3 — Governance Proposal E2E Tests
-
-**Goal:** End-to-end integration tests exercising full proposal flows across all four contracts.
-
-- DAO parameter change: propose ChangeVotingPeriod → vote → finalize → verify dao.votingPeriod() changed.
-- Rank change via governance: propose GrantRank → vote → finalize → verify member rank changed.
-- ERC20 recovery from DAO: propose TransferERC20 → vote → finalize → verify tokens moved.
-- Treasury ETH transfer: deposit → propose → vote → finalize → execute → verify ETH moved.
-- Module action via treasury: propose ADD_MEMBER_TREASURER → vote → finalize → execute → verify TreasurerModule state.
-- Cross-contract security: outsider can't call onlyController, onlyModule, onlyTreasury.
+77 tests total covering:
+- **DAO:** bootstrap (4), setController (4), changeMyAuthority (4), pause (2), fund rejection (1), voting power (3), rank helpers (3)
+- **Invites:** issue, accept, double-accept, expiry, reclaim, G-rank blocked, existing member (8)
+- **Orders:** all 3 types, delay, blocking, single-target (7)
+- **Order Limits:** SSS multi, E-rank cap, slot freed by execute/block (4)
+- **Rescind:** happy path, non-issuer, executed, blocked, slot free, outsider (6)
+- **Governance Proposals:** GrantRank, DemoteRank, ChangeAuthority, ChangeVotingPeriod, BlockOrder, TransferERC20, vote-after-end, double-vote, early-finalize, quorum, tie, decrement (12)
+- **Treasury:** deposits, TRANSFER_ETH/ERC20 lifecycle, settings, revert paths, locked (12)
+- **Security:** onlyController, onlyModule, onlyTreasury (3)
 
 ---
 
