@@ -10,12 +10,13 @@ pragma solidity ^0.8.24;
       - Rank math helpers (votingPowerOfRank, inviteAllowanceOfRank, proposalLimitOfRank)
       - Configurable governance parameters (votingPeriod, quorumBps, etc.)
       - Bootstrap controls for initial member seeding
-      - Controller authorization: a single GovernanceController address that may
-        mutate ranks, authorities, add members, and update governance params.
+      - Controller authorization: ProposalController (governance params, proposals),
+        OrderController (rank/authority via timelocked orders), and InviteController
+        (invite-based member additions).
 
-    The GovernanceController is set once via `setController()` (owner-only) and
-    afterwards all privileged mutations flow through it.  MembershipTreasury
-    reads this contract through the IRankedMembershipDAO interface.
+    The controllers are set via `setController()`, `setOrderController()`, and
+    `setInviteController()` (owner or controller).  MembershipTreasury reads
+    this contract through the IRankedMembershipDAO interface.
 */
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -150,7 +151,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     bool public bootstrapFinalized;
 
     // ================================================================
-    //                   CONTROLLER (GovernanceController)
+    //                   CONTROLLER (ProposalController)
     // ================================================================
 
     address public controller;
@@ -178,6 +179,12 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     address public inviteController;
 
     // ================================================================
+    //              ORDER CONTROLLER (for rank/authority orders)
+    // ================================================================
+
+    address public orderController;
+
+    // ================================================================
     //                          EVENTS
     // ================================================================
 
@@ -185,6 +192,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     event BootstrapFinalized();
     event ControllerSet(address indexed controller);
     event InviteControllerSet(address indexed inviteController);
+    event OrderControllerSet(address indexed orderController);
 
     event MemberJoined(uint32 indexed memberId, address indexed authority, Rank rank);
     event AuthorityChanged(
@@ -270,23 +278,32 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit InviteControllerSet(_inviteController);
     }
 
+    /// @notice Set the OrderController address (authorized to call setRank/setAuthority for orders).
+    ///         Callable by the owner (during bootstrap) or by the current controller.
+    function setOrderController(address _orderController) external {
+        if (msg.sender != owner() && msg.sender != controller) revert NotController();
+        if (_orderController == address(0)) revert InvalidAddress();
+        orderController = _orderController;
+        emit OrderControllerSet(_orderController);
+    }
+
     // ================================================================
-    //      CONTROLLER-ONLY MUTATIONS (called by GovernanceController)
+    //    CONTROLLER-ONLY MUTATIONS (called by ProposalController / OrderController)
     // ================================================================
 
-    /// @notice Set a member's rank. Only callable by the controller.
+    /// @notice Set a member's rank. Callable by the controller or orderController.
     function setRank(uint32 memberId, Rank newRank, uint32 byMemberId, bool viaGovernance)
         external
-        onlyController
     {
+        if (msg.sender != controller && msg.sender != orderController) revert NotController();
         _setRank(memberId, newRank, byMemberId, viaGovernance);
     }
 
-    /// @notice Set a member's authority address. Only callable by the controller.
+    /// @notice Set a member's authority address. Callable by the controller or orderController.
     function setAuthority(uint32 memberId, address newAuthority, uint32 byMemberId, bool viaGovernance)
         external
-        onlyController
     {
+        if (msg.sender != controller && msg.sender != orderController) revert NotController();
         _setAuthority(memberId, newAuthority, byMemberId, viaGovernance);
     }
 

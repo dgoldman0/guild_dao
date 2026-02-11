@@ -60,23 +60,19 @@ export const DAO_ABI = [
   "event BootstrapFinalized()",
 ];
 
-export const GOVERNANCE_ABI = [
+export const ORDER_CONTROLLER_ABI = [
   // ── References ───────────────────────────────
   "function dao() view returns (address)",
 
   // ── Counters ─────────────────────────────────
   "function nextOrderId() view returns (uint64)",
-  "function nextProposalId() view returns (uint64)",
 
   // ── State queries ────────────────────────────
   "function activeOrdersOf(uint32) view returns (uint16)",
-  "function activeProposalsOf(uint32) view returns (uint16)",
   "function pendingOrderOfTarget(uint32) view returns (uint64)",
-  "function hasVoted(uint64, uint32) view returns (bool)",
 
-  // ── Struct getters ───────────────────────────
+  // ── Struct getter ────────────────────────────
   "function getOrder(uint64 orderId) view returns (tuple(bool exists, uint64 orderId, uint8 orderType, uint32 issuerId, uint8 issuerRankAtCreation, uint32 targetId, uint8 newRank, address newAuthority, uint64 createdAt, uint64 executeAfter, bool blocked, bool executed, uint32 blockedById))",
-  "function getProposal(uint64 proposalId) view returns (tuple(bool exists, uint64 proposalId, uint8 proposalType, uint32 proposerId, uint32 targetId, uint8 rankValue, address addressValue, uint64 parameterValue, uint64 orderIdToBlock, address erc20Token, uint256 erc20Amount, address erc20Recipient, uint32 snapshotBlock, uint64 startTime, uint64 endTime, uint224 yesVotes, uint224 noVotes, bool finalized, bool succeeded))",
 
   // ── Order actions ────────────────────────────
   "function issuePromotionGrant(uint32 targetId, uint8 newRank) returns (uint64)",
@@ -86,6 +82,29 @@ export const GOVERNANCE_ABI = [
   "function executeOrder(uint64 orderId)",
   "function blockOrder(uint64 orderId)",
   "function rescindOrder(uint64 orderId)",
+
+  // ── Events ───────────────────────────────────
+  "event OrderCreated(uint64 indexed orderId, uint8 orderType, uint32 indexed issuerId, uint32 indexed targetId, uint8 newRank, address newAuthority, uint64 executeAfter)",
+  "event OrderBlocked(uint64 indexed orderId, uint32 indexed blockerId)",
+  "event OrderBlockedByGovernance(uint64 indexed orderId, uint64 indexed proposalId)",
+  "event OrderExecuted(uint64 indexed orderId)",
+  "event OrderRescinded(uint64 indexed orderId, uint32 indexed issuerId)",
+];
+
+export const PROPOSAL_CONTROLLER_ABI = [
+  // ── References ───────────────────────────────
+  "function dao() view returns (address)",
+  "function orderCtrl() view returns (address)",
+
+  // ── Counters ─────────────────────────────────
+  "function nextProposalId() view returns (uint64)",
+
+  // ── State queries ────────────────────────────
+  "function activeProposalsOf(uint32) view returns (uint16)",
+  "function hasVoted(uint64, uint32) view returns (bool)",
+
+  // ── Struct getter ────────────────────────────
+  "function getProposal(uint64 proposalId) view returns (tuple(bool exists, uint64 proposalId, uint8 proposalType, uint32 proposerId, uint32 targetId, uint8 rankValue, address addressValue, uint64 parameterValue, uint64 orderIdToBlock, address erc20Token, uint256 erc20Amount, address erc20Recipient, uint32 snapshotBlock, uint64 startTime, uint64 endTime, uint224 yesVotes, uint224 noVotes, bool finalized, bool succeeded))",
 
   // ── Proposal creation ────────────────────────
   "function createProposalGrantRank(uint32 targetId, uint8 newRank) returns (uint64)",
@@ -101,11 +120,6 @@ export const GOVERNANCE_ABI = [
   "function finalizeProposal(uint64 proposalId)",
 
   // ── Events ───────────────────────────────────
-  "event OrderCreated(uint64 indexed orderId, uint8 orderType, uint32 indexed issuerId, uint32 indexed targetId, uint8 newRank, address newAuthority, uint64 executeAfter)",
-  "event OrderBlocked(uint64 indexed orderId, uint32 indexed blockerId)",
-  "event OrderBlockedByGovernance(uint64 indexed orderId, uint64 indexed proposalId)",
-  "event OrderExecuted(uint64 indexed orderId)",
-  "event OrderRescinded(uint64 indexed orderId, uint32 indexed issuerId)",
   "event ProposalCreated(uint64 indexed proposalId, uint8 proposalType, uint32 indexed proposerId, uint32 indexed targetId)",
   "event VoteCast(uint64 indexed proposalId, uint32 indexed voterId, bool support, uint224 weight)",
   "event ProposalFinalized(uint64 indexed proposalId, bool succeeded, uint224 yesVotes, uint224 noVotes)",

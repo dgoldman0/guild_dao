@@ -54,7 +54,11 @@ const ERROR_CATALOG = {
   },
   "NotController()": {
     title: "Not Authorized",
-    hint: "Only the GovernanceController can perform this action.",
+    hint: "Only the ProposalController or OrderController can perform this action.",
+  },
+  "NotProposalController()": {
+    title: "Not Proposal Controller",
+    hint: "Only the ProposalController can call this function on OrderController.",
   },
   "NotFeeRouter()": {
     title: "Not Fee Router",

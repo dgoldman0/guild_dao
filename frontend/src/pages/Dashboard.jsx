@@ -10,7 +10,7 @@ import { EPOCH_SECONDS } from "../lib/constants";
 
 export default function Dashboard() {
   const {
-    isConnected, isMember, dao, treasury, governance, provider,
+    isConnected, isMember, dao, treasury, orderController, proposalController, provider,
     myMember, myMemberId, myPower, myActive, myFeePaidUntil, daoState,
   } = useWeb3();
 
@@ -51,21 +51,21 @@ export default function Dashboard() {
 
   // Active proposals / orders counts
   useEffect(() => {
-    if (!governance) return;
+    if (!proposalController || !orderController) return;
     (async () => {
       try {
-        const nextP = Number(await governance.nextProposalId());
-        const nextO = Number(await governance.nextOrderId());
+        const nextP = Number(await proposalController.nextProposalId());
+        const nextO = Number(await orderController.nextOrderId());
         let pCount = 0, oCount = 0;
         const pPromises = [];
         for (let i = 1; i < nextP; i++) {
-          pPromises.push(governance.getProposal(i).then(p => {
+          pPromises.push(proposalController.getProposal(i).then(p => {
             if (p.exists && !p.finalized) pCount++;
           }).catch(() => {}));
         }
         const oPromises = [];
         for (let i = 1; i < nextO; i++) {
-          oPromises.push(governance.getOrder(i).then(o => {
+          oPromises.push(orderController.getOrder(i).then(o => {
             if (o.exists && !o.executed && !o.blocked) oCount++;
           }).catch(() => {}));
         }
@@ -76,7 +76,7 @@ export default function Dashboard() {
         console.error(e);
       }
     })();
-  }, [governance]);
+  }, [proposalController, orderController]);
 
   if (!isConnected) {
     return (

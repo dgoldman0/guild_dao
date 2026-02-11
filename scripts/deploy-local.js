@@ -4,7 +4,7 @@ const hre = require("hardhat");
   deploy-local.js  —  Full local deploy + populate for frontend testing.
 
   Boots a Hardhat-node world with:
-    • All 6 contracts deployed & wired
+    • All 7 contracts deployed & wired
     • User's real address bootstrapped as SSS
     • 8 additional members at various ranks (using Hardhat signers)
     • Fee config enabled (ETH, 0.01 ETH base, 7-day grace)
@@ -34,12 +34,19 @@ async function main() {
   const daoAddr = await dao.getAddress();
   console.log("   ✅", daoAddr);
 
-  console.log("⚙️  Deploying GovernanceController…");
-  const GOV = await hre.ethers.getContractFactory("GovernanceController");
-  const gov = await GOV.deploy(daoAddr);
-  await gov.waitForDeployment();
-  const govAddr = await gov.getAddress();
-  console.log("   ✅", govAddr);
+  console.log("⚔️  Deploying OrderController…");
+  const ORD = await hre.ethers.getContractFactory("OrderController");
+  const orderCtrl = await ORD.deploy(daoAddr);
+  await orderCtrl.waitForDeployment();
+  const orderCtrlAddr = await orderCtrl.getAddress();
+  console.log("   ✅", orderCtrlAddr);
+
+  console.log("🗳️  Deploying ProposalController…");
+  const PROP = await hre.ethers.getContractFactory("ProposalController");
+  const proposalCtrl = await PROP.deploy(daoAddr, orderCtrlAddr);
+  await proposalCtrl.waitForDeployment();
+  const proposalCtrlAddr = await proposalCtrl.getAddress();
+  console.log("   ✅", proposalCtrlAddr);
 
   console.log("💼 Deploying TreasurerModule…");
   const MOD = await hre.ethers.getContractFactory("TreasurerModule");
@@ -74,7 +81,9 @@ async function main() {
   console.log("\n🔗 Wiring contracts…");
   await (await treasury.setTreasurerModule(modAddr)).wait();
   await (await mod.setTreasury(treasuryAddr)).wait();
-  await (await dao.setController(govAddr)).wait();
+  await (await dao.setController(proposalCtrlAddr)).wait();
+  await (await dao.setOrderController(orderCtrlAddr)).wait();
+  await (await orderCtrl.setProposalController(proposalCtrlAddr)).wait();
   await (await dao.setFeeRouter(feeRouterAddr)).wait();
   await (await dao.setInviteController(inviteControllerAddr)).wait();
   await (await dao.setPayoutTreasury(treasuryAddr)).wait();
@@ -139,40 +148,42 @@ async function main() {
   console.log("   ✅ Invite #1 issued by SS member to", signers[10].address);
 
   // S member (#4, signer[2]) creates a proposal to promote G member (#11) to F
-  const govAsSS = gov.connect(signers[1]);
-  const govAsS = gov.connect(signers[2]);
+  const ordAsSS = orderCtrl.connect(signers[1]);
+  const propAsS = proposalCtrl.connect(signers[2]);
+  const propAsSS = proposalCtrl.connect(signers[1]);
   const gMemberId = await dao.memberIdByAuthority(signers[9].address); // G member
-  const tx2 = await govAsS.createProposalGrantRank(gMemberId, Rank.F);
+  const tx2 = await propAsS.createProposalGrantRank(gMemberId, Rank.F);
   await tx2.wait();
   console.log("   ✅ Proposal #1: Promote G→F");
 
   // SS member casts yes vote on proposal #1
-  await (await govAsSS.castVote(1, true)).wait();
+  await (await propAsSS.castVote(1, true)).wait();
   console.log("   ✅ SS voted YES on proposal #1");
 
   // S member also votes yes
-  await (await govAsS.castVote(1, true)).wait();
+  await (await propAsS.castVote(1, true)).wait();
   console.log("   ✅ S voted YES on proposal #1");
 
   // A member (#5, signer[3]) creates a proposal to change voting period to 3 days
-  const govAsA = gov.connect(signers[3]);
+  const propAsA = proposalCtrl.connect(signers[3]);
   // ProposalType.ChangeVotingPeriod = 3
   const threeDays = 3 * 24 * 3600;
-  const tx3 = await govAsA.createProposalChangeParameter(3, threeDays);
+  const tx3 = await propAsA.createProposalChangeParameter(3, threeDays);
   await tx3.wait();
   console.log("   ✅ Proposal #2: Change voting period to 3 days");
 
   // SS member (#3, signer[1]) issues a promotion grant for D member (#8) → C
   // SS (rank 8) can promote up to rank 8-2 = 6 (A), D→C is fine
   const dMemberId = await dao.memberIdByAuthority(signers[6].address); // D member
-  const tx4 = await govAsSS.issuePromotionGrant(dMemberId, Rank.C);
+  const tx4 = await ordAsSS.issuePromotionGrant(dMemberId, Rank.C);
   await tx4.wait();
   console.log("   ✅ Order #1: SS promotes D→C");
 
   // S member (#4, signer[2]) issues demotion of F member (#10)
   // S (rank 7), F is rank 1. 7 >= 1+2 ✓
+  const ordAsS = orderCtrl.connect(signers[2]);
   const fMemberId = await dao.memberIdByAuthority(signers[8].address); // F member
-  const tx5 = await govAsS.issueDemotionOrder(fMemberId);
+  const tx5 = await ordAsS.issueDemotionOrder(fMemberId);
   await tx5.wait();
   console.log("   ✅ Order #2: S demotes F→G");
 
@@ -192,7 +203,8 @@ async function main() {
   console.log("  🎉  LOCAL DEPLOYMENT COMPLETE");
   console.log("══════════════════════════════════════════════════════════");
   console.log("  RankedMembershipDAO:  ", daoAddr);
-  console.log("  GovernanceController: ", govAddr);
+  console.log("  OrderController:      ", orderCtrlAddr);
+  console.log("  ProposalController:   ", proposalCtrlAddr);
   console.log("  InviteController:     ", inviteControllerAddr);
   console.log("  TreasurerModule:      ", modAddr);
   console.log("  MembershipTreasury:   ", treasuryAddr);
@@ -210,7 +222,7 @@ async function main() {
   console.log("  → Then open the frontend at  http://localhost:5173\n");
 
   // ─────────── Output JSON for easy config patching ───────────
-  const addresses = { dao: daoAddr, governance: govAddr, inviteController: inviteControllerAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
+  const addresses = { dao: daoAddr, orderController: orderCtrlAddr, proposalController: proposalCtrlAddr, inviteController: inviteControllerAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
   console.log("ADDRESSES_JSON=" + JSON.stringify(addresses));
 }
 

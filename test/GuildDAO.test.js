@@ -38,7 +38,7 @@ const PType = {
 };
 
 describe("Guild DAO System", function () {
-  let dao, governance, inviteController, treasurerModule, treasury, feeRouter;
+  let dao, orders, proposals, inviteController, treasurerModule, treasury, feeRouter;
   let owner, member1, member2, outsider, extra1, extra2, extra3;
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
@@ -51,15 +51,15 @@ describe("Guild DAO System", function () {
   }
 
   async function promoteViaOrder(issuer, targetId, newRank) {
-    const tx = await governance.connect(issuer).issuePromotionGrant(targetId, newRank);
-    const orderId = (await governance.nextOrderId()) - 1n;
+    const tx = await orders.connect(issuer).issuePromotionGrant(targetId, newRank);
+    const orderId = (await orders.nextOrderId()) - 1n;
     await ethers.provider.send("evm_increaseTime", [86401]);
     await ethers.provider.send("evm_mine");
     const member = await dao.getMember(targetId);
     const targetSigner = (await ethers.getSigners()).find(
       (s) => s.address === member.authority
     );
-    await governance.connect(targetSigner).acceptPromotionGrant(orderId);
+    await orders.connect(targetSigner).acceptPromotionGrant(orderId);
     return orderId;
   }
 
@@ -95,11 +95,17 @@ describe("Guild DAO System", function () {
     dao = await RankedMembershipDAO.deploy();
     await dao.waitForDeployment();
 
-    const GovernanceController = await ethers.getContractFactory("GovernanceController");
-    governance = await GovernanceController.deploy(await dao.getAddress());
-    await governance.waitForDeployment();
+    const OrderController = await ethers.getContractFactory("OrderController");
+    orders = await OrderController.deploy(await dao.getAddress());
+    await orders.waitForDeployment();
 
-    await dao.setController(await governance.getAddress());
+    const ProposalController = await ethers.getContractFactory("ProposalController");
+    proposals = await ProposalController.deploy(await dao.getAddress(), await orders.getAddress());
+    await proposals.waitForDeployment();
+
+    await dao.setController(await proposals.getAddress());
+    await dao.setOrderController(await orders.getAddress());
+    await orders.setProposalController(await proposals.getAddress());
 
     const TreasurerModule = await ethers.getContractFactory("TreasurerModule");
     treasurerModule = await TreasurerModule.deploy(await dao.getAddress());
@@ -130,17 +136,22 @@ describe("Guild DAO System", function () {
   //  Deployment
   // ══════════════════════════════════════════════════════════
   describe("Deployment", function () {
-    it("deploys all contracts including InviteController", async function () {
+    it("deploys all contracts including split controllers", async function () {
       expect(await dao.getAddress()).to.be.properAddress;
-      expect(await governance.getAddress()).to.be.properAddress;
+      expect(await orders.getAddress()).to.be.properAddress;
+      expect(await proposals.getAddress()).to.be.properAddress;
       expect(await inviteController.getAddress()).to.be.properAddress;
       expect(await treasurerModule.getAddress()).to.be.properAddress;
       expect(await treasury.getAddress()).to.be.properAddress;
       expect(await feeRouter.getAddress()).to.be.properAddress;
     });
 
-    it("links controller to DAO", async function () {
-      expect(await dao.controller()).to.equal(await governance.getAddress());
+    it("links controller (ProposalController) to DAO", async function () {
+      expect(await dao.controller()).to.equal(await proposals.getAddress());
+    });
+
+    it("links orderController to DAO", async function () {
+      expect(await dao.orderController()).to.equal(await orders.getAddress());
     });
 
     it("links inviteController to DAO", async function () {
@@ -211,12 +222,11 @@ describe("Guild DAO System", function () {
       });
 
       it("current controller can migrate to a new controller", async function () {
-        // governance is the controller — call setController from governance contract?
-        // We can't directly impersonate, but we can use the fact that owner can still call it
-        // since owner != address(0). After finalize, only controller can call.
+        // proposals controller is the controller — owner can't call after finalize
+        // We can't directly impersonate, but we can verify random caller reverts
         await dao.finalizeBootstrap(); // owner renounced
-        // Now only controller (governance contract) can call setController.
-        // We can't call dao.setController from governance directly (no such method).
+        // Now only controller (proposals contract) can call setController.
+        // We can't call dao.setController from proposals directly (no such method).
         // Instead, verify random caller reverts:
         await expect(
           dao.connect(member1).setController(member2.address)
@@ -426,15 +436,15 @@ describe("Guild DAO System", function () {
     });
 
     it("promotion grant: create, wait, accept", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
       // Too early
       await expect(
-        governance.connect(member1).acceptPromotionGrant(1)
-      ).to.be.revertedWithCustomError(governance, "OrderNotReady");
+        orders.connect(member1).acceptPromotionGrant(1)
+      ).to.be.revertedWithCustomError(orders, "OrderNotReady");
       // Wait
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(member1).acceptPromotionGrant(1);
+      await orders.connect(member1).acceptPromotionGrant(1);
       expect((await dao.getMember(m1Id)).rank).to.equal(Rank.F);
     });
 
@@ -442,77 +452,77 @@ describe("Guild DAO System", function () {
       // Promote m1 to E first so SSS can demote E (SSS=9 >= E(2)+2=4 ✓)
       await promoteViaOrder(owner, m1Id, Rank.E);
 
-      await governance.connect(owner).issueDemotionOrder(m1Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(owner).issueDemotionOrder(m1Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
 
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).executeOrder(orderId);
+      await orders.connect(owner).executeOrder(orderId);
 
       expect((await dao.getMember(m1Id)).rank).to.equal(Rank.F); // E-1=D? No, demotion does rank-1
     });
 
     it("authority order: create, wait, execute", async function () {
       // SSS(9) can issue authority order on G(0): 9 >= 0+2 ✓
-      await governance.connect(owner).issueAuthorityOrder(m1Id, extra2.address);
-      const orderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(owner).issueAuthorityOrder(m1Id, extra2.address);
+      const orderId = (await orders.nextOrderId()) - 1n;
 
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).executeOrder(orderId);
+      await orders.connect(owner).executeOrder(orderId);
 
       expect((await dao.getMember(m1Id)).authority).to.equal(extra2.address);
     });
 
     it("block order by higher rank", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
-      const orderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      const orderId = (await orders.nextOrderId()) - 1n;
       // blocker needs rank >= SSS(9)+2 = impossible for SSS
       // Let's use a different scenario: promote m1 to E, m1 issues demotion on m2,
       // then SSS blocks
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(member1).acceptPromotionGrant(orderId);
+      await orders.connect(member1).acceptPromotionGrant(orderId);
 
       // promote m1 further to E
       await promoteViaOrder(owner, m1Id, Rank.E);
 
       // m1 (E=2) demotes m2 (G=0): 2 >= 0+2 ✓
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const demoOrderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const demoOrderId = (await orders.nextOrderId()) - 1n;
 
       // Owner (SSS=9) blocks: 9 >= 2+2 ✓
-      await governance.connect(owner).blockOrder(demoOrderId);
-      const order = await governance.getOrder(demoOrderId);
+      await orders.connect(owner).blockOrder(demoOrderId);
+      const order = await orders.getOrder(demoOrderId);
       expect(order.blocked).to.be.true;
     });
 
     it("cannot execute before delay", async function () {
-      await governance.connect(owner).issueDemotionOrder(m1Id);
+      await orders.connect(owner).issueDemotionOrder(m1Id);
       await expect(
-        governance.connect(owner).executeOrder(1)
-      ).to.be.revertedWithCustomError(governance, "OrderNotReady");
+        orders.connect(owner).executeOrder(1)
+      ).to.be.revertedWithCustomError(orders, "OrderNotReady");
     });
 
     it("cannot execute blocked order", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
-      await governance.connect(owner).blockOrder(orderId);
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await orders.connect(owner).blockOrder(orderId);
 
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
       await expect(
-        governance.connect(member1).executeOrder(orderId)
-      ).to.be.revertedWithCustomError(governance, "OrderIsBlocked");
+        orders.connect(member1).executeOrder(orderId)
+      ).to.be.revertedWithCustomError(orders, "OrderIsBlocked");
     });
 
     it("only one pending order per target", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
       // second order on same target fails
       await expect(
-        governance.connect(owner).issueDemotionOrder(m1Id)
-      ).to.be.revertedWithCustomError(governance, "PendingActionExists");
+        orders.connect(owner).issueDemotionOrder(m1Id)
+      ).to.be.revertedWithCustomError(orders, "PendingActionExists");
     });
   });
 
@@ -529,40 +539,40 @@ describe("Guild DAO System", function () {
     });
 
     it("SSS member can issue many orders", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
-      await governance.connect(owner).issuePromotionGrant(m2Id, Rank.F);
-      await governance.connect(owner).issuePromotionGrant(m3Id, Rank.F);
-      expect(await governance.activeOrdersOf(1)).to.equal(3);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m2Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m3Id, Rank.F);
+      expect(await orders.activeOrdersOf(1)).to.equal(3);
     });
 
     it("E-rank member (limit=1) is blocked from second order", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
+      await orders.connect(member1).issueDemotionOrder(m2Id);
       await expect(
-        governance.connect(member1).issueDemotionOrder(m3Id)
-      ).to.be.revertedWithCustomError(governance, "TooManyActiveOrders");
+        orders.connect(member1).issueDemotionOrder(m3Id)
+      ).to.be.revertedWithCustomError(orders, "TooManyActiveOrders");
     });
 
     it("slot freed by execute allows another order", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(member1).executeOrder(orderId);
+      await orders.connect(member1).executeOrder(orderId);
 
-      await governance.connect(member1).issueDemotionOrder(m3Id);
-      expect(await governance.activeOrdersOf(m1Id)).to.equal(1);
+      await orders.connect(member1).issueDemotionOrder(m3Id);
+      expect(await orders.activeOrdersOf(m1Id)).to.equal(1);
     });
 
     it("slot freed by block allows another order", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
-      await governance.connect(owner).blockOrder(orderId);
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await orders.connect(owner).blockOrder(orderId);
 
-      await governance.connect(member1).issueDemotionOrder(m3Id);
-      expect(await governance.activeOrdersOf(m1Id)).to.equal(1);
+      await orders.connect(member1).issueDemotionOrder(m3Id);
+      expect(await orders.activeOrdersOf(m1Id)).to.equal(1);
     });
   });
 
@@ -579,57 +589,57 @@ describe("Guild DAO System", function () {
     });
 
     it("issuer can rescind their own pending order", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
-      const orderId = (await governance.nextOrderId()) - 1n;
-      await expect(governance.connect(owner).rescindOrder(orderId))
-        .to.emit(governance, "OrderRescinded").withArgs(orderId, 1);
-      expect(await governance.activeOrdersOf(1)).to.equal(0);
-      expect(await governance.pendingOrderOfTarget(m1Id)).to.equal(0);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await expect(orders.connect(owner).rescindOrder(orderId))
+        .to.emit(orders, "OrderRescinded").withArgs(orderId, 1);
+      expect(await orders.activeOrdersOf(1)).to.equal(0);
+      expect(await orders.pendingOrderOfTarget(m1Id)).to.equal(0);
     });
 
     it("non-issuer cannot rescind", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
       await expect(
-        governance.connect(member1).rescindOrder(1)
-      ).to.be.revertedWithCustomError(governance, "InvalidTarget");
+        orders.connect(member1).rescindOrder(1)
+      ).to.be.revertedWithCustomError(orders, "InvalidTarget");
     });
 
     it("cannot rescind executed order", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
       await ethers.provider.send("evm_increaseTime", [86401]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(member1).acceptPromotionGrant(1);
+      await orders.connect(member1).acceptPromotionGrant(1);
       await expect(
-        governance.connect(owner).rescindOrder(1)
-      ).to.be.revertedWithCustomError(governance, "OrderNotReady");
+        orders.connect(owner).rescindOrder(1)
+      ).to.be.revertedWithCustomError(orders, "OrderNotReady");
     });
 
     it("cannot rescind blocked order", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
-      await governance.connect(owner).blockOrder(orderId);
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await orders.connect(owner).blockOrder(orderId);
       await expect(
-        governance.connect(member1).rescindOrder(orderId)
-      ).to.be.revertedWithCustomError(governance, "OrderIsBlocked");
+        orders.connect(member1).rescindOrder(orderId)
+      ).to.be.revertedWithCustomError(orders, "OrderIsBlocked");
     });
 
     it("rescind frees slot for E-rank member", async function () {
       await promoteViaOrder(owner, m1Id, Rank.E);
-      await governance.connect(member1).issueDemotionOrder(m2Id);
-      const orderId = (await governance.nextOrderId()) - 1n;
-      await expect(governance.connect(member1).issueDemotionOrder(m3Id))
-        .to.be.revertedWithCustomError(governance, "TooManyActiveOrders");
-      await governance.connect(member1).rescindOrder(orderId);
-      await governance.connect(member1).issueDemotionOrder(m3Id);
-      expect(await governance.activeOrdersOf(m1Id)).to.equal(1);
+      await orders.connect(member1).issueDemotionOrder(m2Id);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await expect(orders.connect(member1).issueDemotionOrder(m3Id))
+        .to.be.revertedWithCustomError(orders, "TooManyActiveOrders");
+      await orders.connect(member1).rescindOrder(orderId);
+      await orders.connect(member1).issueDemotionOrder(m3Id);
+      expect(await orders.activeOrdersOf(m1Id)).to.equal(1);
     });
 
     it("outsider cannot rescind", async function () {
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
       await expect(
-        governance.connect(outsider).rescindOrder(1)
-      ).to.be.revertedWithCustomError(governance, "NotMember");
+        orders.connect(outsider).rescindOrder(1)
+      ).to.be.revertedWithCustomError(orders, "NotMember");
     });
   });
 
@@ -642,18 +652,18 @@ describe("Guild DAO System", function () {
       const m1Id = await inviteAndAccept(owner, member1);
 
       // owner (SSS) proposes promoting m1 to A
-      await governance.connect(owner).createProposalGrantRank(m1Id, Rank.A);
-      const propId = (await governance.nextProposalId()) - 1n;
+      await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.A);
+      const propId = (await proposals.nextProposalId()) - 1n;
 
       // vote yes
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).castVote(propId, true);
 
       // wait for voting period to end
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
 
-      await governance.connect(owner).finalizeProposal(propId);
-      const p = await governance.getProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
+      const p = await proposals.getProposal(propId);
       expect(p.succeeded).to.be.true;
       expect((await dao.getMember(m1Id)).rank).to.equal(Rank.A);
     });
@@ -662,12 +672,12 @@ describe("Guild DAO System", function () {
       const m1Id = await inviteAndAccept(owner, member1);
       await promoteViaOrder(owner, m1Id, Rank.E);
 
-      await governance.connect(owner).createProposalDemoteRank(m1Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).createProposalDemoteRank(m1Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
       expect((await dao.getMember(m1Id)).rank).to.equal(Rank.F);
     });
@@ -675,42 +685,42 @@ describe("Guild DAO System", function () {
     it("ChangeAuthority proposal: full cycle", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
 
-      await governance.connect(owner).createProposalChangeAuthority(m1Id, extra2.address);
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).createProposalChangeAuthority(m1Id, extra2.address);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
       expect((await dao.getMember(m1Id)).authority).to.equal(extra2.address);
     });
 
     it("ChangeVotingPeriod parameter proposal: full cycle", async function () {
       const newPeriod = 3 * 86400; // 3 days
-      await governance.connect(owner).createProposalChangeParameter(PType.ChangeVotingPeriod, newPeriod);
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).createProposalChangeParameter(PType.ChangeVotingPeriod, newPeriod);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
       expect(await dao.votingPeriod()).to.equal(newPeriod);
     });
 
     it("BlockOrder proposal: full cycle", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
-      await governance.connect(owner).issuePromotionGrant(m1Id, Rank.F);
-      const orderId = (await governance.nextOrderId()) - 1n;
+      await orders.connect(owner).issuePromotionGrant(m1Id, Rank.F);
+      const orderId = (await orders.nextOrderId()) - 1n;
 
       // propose to block the order
-      await governance.connect(owner).createProposalBlockOrder(orderId);
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).createProposalBlockOrder(orderId);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
-      const order = await governance.getOrder(orderId);
+      const order = await orders.getOrder(orderId);
       expect(order.blocked).to.be.true;
     });
 
@@ -721,14 +731,14 @@ describe("Guild DAO System", function () {
       const amount = ethers.parseUnits("100", 18);
       await token.mint(await dao.getAddress(), amount);
 
-      await governance.connect(owner).createProposalTransferERC20(
+      await proposals.connect(owner).createProposalTransferERC20(
         await token.getAddress(), amount, member1.address
       );
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
       expect(await token.balanceOf(member1.address)).to.equal(amount);
     });
@@ -736,34 +746,34 @@ describe("Guild DAO System", function () {
     // --- Edge cases ---
     it("vote after voting period ends → revert", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
-      await governance.connect(owner).createProposalGrantRank(m1Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
+      await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
 
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
 
       await expect(
-        governance.connect(owner).castVote(propId, true)
-      ).to.be.revertedWithCustomError(governance, "ProposalEnded");
+        proposals.connect(owner).castVote(propId, true)
+      ).to.be.revertedWithCustomError(proposals, "ProposalEnded");
     });
 
     it("double vote → revert", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
-      await governance.connect(owner).createProposalGrantRank(m1Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
-      await governance.connect(owner).castVote(propId, true);
+      await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await proposals.connect(owner).castVote(propId, true);
       await expect(
-        governance.connect(owner).castVote(propId, false)
-      ).to.be.revertedWithCustomError(governance, "AlreadyVoted");
+        proposals.connect(owner).castVote(propId, false)
+      ).to.be.revertedWithCustomError(proposals, "AlreadyVoted");
     });
 
     it("finalize before end → revert", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
-      await governance.connect(owner).createProposalGrantRank(m1Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
+      await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
       await expect(
-        governance.connect(owner).finalizeProposal(propId)
-      ).to.be.revertedWithCustomError(governance, "ProposalEnded");
+        proposals.connect(owner).finalizeProposal(propId)
+      ).to.be.revertedWithCustomError(proposals, "ProposalEnded");
     });
 
     it("quorum not met → proposal fails", async function () {
@@ -774,8 +784,8 @@ describe("Guild DAO System", function () {
       // Only G member (power=1) votes — won't meet quorum
       const m4Id = await inviteAndAccept(owner, extra1); // G member
 
-      await governance.connect(owner).createProposalGrantRank(m4Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
+      await proposals.connect(owner).createProposalGrantRank(m4Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
 
       // Only extra1 (G, power=1) votes yes
       // Wait, extra1 is G and just joined — they need to vote
@@ -788,9 +798,9 @@ describe("Guild DAO System", function () {
       // Simply: don't vote at all
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
-      const p = await governance.getProposal(propId);
+      const p = await proposals.getProposal(propId);
       expect(p.succeeded).to.be.false;
     });
 
@@ -798,30 +808,30 @@ describe("Guild DAO System", function () {
       await dao.bootstrapAddMember(member1.address, Rank.SSS);
       const m3Id = await inviteAndAccept(owner, extra1);
 
-      await governance.connect(owner).createProposalGrantRank(m3Id, Rank.F);
-      const propId = (await governance.nextProposalId()) - 1n;
+      await proposals.connect(owner).createProposalGrantRank(m3Id, Rank.F);
+      const propId = (await proposals.nextProposalId()) - 1n;
 
       // owner votes yes (512), member1 votes no (512)
-      await governance.connect(owner).castVote(propId, true);
-      await governance.connect(member1).castVote(propId, false);
+      await proposals.connect(owner).castVote(propId, true);
+      await proposals.connect(member1).castVote(propId, false);
 
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(propId);
+      await proposals.connect(owner).finalizeProposal(propId);
 
-      const p = await governance.getProposal(propId);
+      const p = await proposals.getProposal(propId);
       expect(p.succeeded).to.be.false; // tie → fails (yes <= no)
     });
 
     it("activeProposalsOf decrements on finalize", async function () {
       const m1Id = await inviteAndAccept(owner, member1);
-      await governance.connect(owner).createProposalGrantRank(m1Id, Rank.F);
-      expect(await governance.activeProposalsOf(1)).to.equal(1);
+      await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.F);
+      expect(await proposals.activeProposalsOf(1)).to.equal(1);
 
       await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
       await ethers.provider.send("evm_mine");
-      await governance.connect(owner).finalizeProposal(1);
-      expect(await governance.activeProposalsOf(1)).to.equal(0);
+      await proposals.connect(owner).finalizeProposal(1);
+      expect(await proposals.activeProposalsOf(1)).to.equal(0);
     });
   });
 
@@ -1168,12 +1178,12 @@ describe("Guild DAO System", function () {
 
         const totalBefore = await dao.totalVotingPower();
         // promote via governance proposal
-        await governance.connect(owner).createProposalGrantRank(m1Id, Rank.A);
-        const propId = (await governance.nextProposalId()) - 1n;
-        await governance.connect(owner).castVote(propId, true);
+        await proposals.connect(owner).createProposalGrantRank(m1Id, Rank.A);
+        const propId = (await proposals.nextProposalId()) - 1n;
+        await proposals.connect(owner).castVote(propId, true);
         await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
         await ethers.provider.send("evm_mine");
-        await governance.connect(owner).finalizeProposal(propId);
+        await proposals.connect(owner).finalizeProposal(propId);
 
         // rank changed but power still 0
         expect((await dao.getMember(m1Id)).rank).to.equal(Rank.A);
@@ -1332,14 +1342,14 @@ describe("Guild DAO System", function () {
         await dao.finalizeBootstrap();
 
         // Create proposal to reset bootstrap fee for m1
-        await governance.connect(owner).createProposalResetBootstrapFee(m1Id);
-        const propId = (await governance.nextProposalId()) - 1n;
-        await governance.connect(owner).castVote(propId, true);
+        await proposals.connect(owner).createProposalResetBootstrapFee(m1Id);
+        const propId = (await proposals.nextProposalId()) - 1n;
+        await proposals.connect(owner).castVote(propId, true);
         await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
         await ethers.provider.send("evm_mine");
-        await governance.connect(owner).finalizeProposal(propId);
+        await proposals.connect(owner).finalizeProposal(propId);
 
-        const p = await governance.getProposal(propId);
+        const p = await proposals.getProposal(propId);
         expect(p.succeeded).to.be.true;
 
         const paidUntil = await dao.feePaidUntil(m1Id);
@@ -1378,8 +1388,8 @@ describe("Guild DAO System", function () {
         const m1Id = await inviteAndAccept(owner, member1);
         // m1 is invited, not bootstrap
         await expect(
-          governance.connect(owner).createProposalResetBootstrapFee(m1Id)
-        ).to.be.revertedWithCustomError(governance, "InvalidTarget");
+          proposals.connect(owner).createProposalResetBootstrapFee(m1Id)
+        ).to.be.revertedWithCustomError(proposals, "InvalidTarget");
       });
 
       it("createProposalResetBootstrapFee reverts if rank too low", async function () {
@@ -1392,8 +1402,8 @@ describe("Guild DAO System", function () {
         const m2Id = await inviteAndAccept(owner, member2);
         // m2 is G rank, below F minimum for proposals
         await expect(
-          governance.connect(member2).createProposalResetBootstrapFee(1)
-        ).to.be.revertedWithCustomError(governance, "RankTooLow");
+          proposals.connect(member2).createProposalResetBootstrapFee(1)
+        ).to.be.revertedWithCustomError(proposals, "RankTooLow");
       });
 
       it("second fee payment after governance reset extends normally", async function () {
@@ -1405,12 +1415,12 @@ describe("Guild DAO System", function () {
         await dao.finalizeBootstrap();
 
         // Use governance to reset bootstrap fee for member #1
-        await governance.connect(owner).createProposalResetBootstrapFee(1);
-        const propId = (await governance.nextProposalId()) - 1n;
-        await governance.connect(owner).castVote(propId, true);
+        await proposals.connect(owner).createProposalResetBootstrapFee(1);
+        const propId = (await proposals.nextProposalId()) - 1n;
+        await proposals.connect(owner).castVote(propId, true);
         await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
         await ethers.provider.send("evm_mine");
-        await governance.connect(owner).finalizeProposal(propId);
+        await proposals.connect(owner).finalizeProposal(propId);
 
         // First payment extends from now + EPOCH
         await feeRouter.connect(owner).payMembershipFee(1, { value: fee });

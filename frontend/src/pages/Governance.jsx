@@ -33,7 +33,7 @@ function proposalDescription(p) {
 }
 
 export default function Governance() {
-  const { governance, dao, isConnected, isMember, myMemberId, sendTx } = useWeb3();
+  const { proposalController, dao, isConnected, isMember, myMemberId, sendTx } = useWeb3();
   const [proposals, setProposals] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all"); // all, active, passed, failed
@@ -57,13 +57,13 @@ export default function Governance() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!governance) return;
+    if (!proposalController) return;
     setLoading(true);
     try {
-      const nextId = Number(await governance.nextProposalId());
+      const nextId = Number(await proposalController.nextProposalId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getProposal(id).then((p) => ({ ...resultToObject(p), _id: id })).catch(() => null)
+          proposalController.getProposal(id).then((p) => ({ ...resultToObject(p), _id: id })).catch(() => null)
         )
       );
       setProposals(results.filter(Boolean).filter((p) => p.exists).reverse());
@@ -72,7 +72,7 @@ export default function Governance() {
     } finally {
       setLoading(false);
     }
-  }, [governance]);
+  }, [proposalController]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -84,25 +84,25 @@ export default function Governance() {
   });
 
   async function handleVote(proposalId, support) {
-    await sendTx(`Vote ${support ? "Yes" : "No"}`, governance.castVote(proposalId, support));
+    await sendTx(`Vote ${support ? "Yes" : "No"}`, proposalController.castVote(proposalId, support));
     load();
   }
 
   async function handleFinalize(proposalId) {
-    await sendTx("Finalize", governance.finalizeProposal(proposalId));
+    await sendTx("Finalize", proposalController.finalizeProposal(proposalId));
     load();
   }
 
   async function handleCreate() {
     const t = Number(formType);
     let txP;
-    if (t === 0) txP = governance.createProposalGrantRank(Number(formTarget), Number(formRank));
-    else if (t === 1) txP = governance.createProposalDemoteRank(Number(formTarget), Number(formRank));
-    else if (t === 2) txP = governance.createProposalChangeAuthority(Number(formTarget), formAddress);
-    else if (t >= 3 && t <= 7) txP = governance.createProposalChangeParameter(t, BigInt(formValue));
-    else if (t === 8) txP = governance.createProposalBlockOrder(Number(formOrderId));
-    else if (t === 9) txP = governance.createProposalTransferERC20(formToken, BigInt(formAmount), formRecipient);
-    else if (t === 10) txP = governance.createProposalResetBootstrapFee(Number(formTarget));
+    if (t === 0) txP = proposalController.createProposalGrantRank(Number(formTarget), Number(formRank));
+    else if (t === 1) txP = proposalController.createProposalDemoteRank(Number(formTarget), Number(formRank));
+    else if (t === 2) txP = proposalController.createProposalChangeAuthority(Number(formTarget), formAddress);
+    else if (t >= 3 && t <= 7) txP = proposalController.createProposalChangeParameter(t, BigInt(formValue));
+    else if (t === 8) txP = proposalController.createProposalBlockOrder(Number(formOrderId));
+    else if (t === 9) txP = proposalController.createProposalTransferERC20(formToken, BigInt(formAmount), formRecipient);
+    else if (t === 10) txP = proposalController.createProposalResetBootstrapFee(Number(formTarget));
     else return;
 
     await sendTx("Create Proposal", txP);

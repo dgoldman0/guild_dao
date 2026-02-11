@@ -22,7 +22,7 @@ function orderDescription(o) {
 }
 
 export default function Orders() {
-  const { governance, isConnected, isMember, myMemberId, sendTx } = useWeb3();
+  const { orderController, isConnected, isMember, myMemberId, sendTx } = useWeb3();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
@@ -41,13 +41,13 @@ export default function Orders() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!governance) return;
+    if (!orderController) return;
     setLoading(true);
     try {
-      const nextId = Number(await governance.nextOrderId());
+      const nextId = Number(await orderController.nextOrderId());
       const results = await Promise.all(
         Array.from({ length: nextId - 1 }, (_, i) => i + 1).map((id) =>
-          governance.getOrder(id).then((o) => ({ ...resultToObject(o), _id: id })).catch(() => null)
+          orderController.getOrder(id).then((o) => ({ ...resultToObject(o), _id: id })).catch(() => null)
         )
       );
       setOrders(results.filter(Boolean).filter((o) => o.exists).reverse());
@@ -56,7 +56,7 @@ export default function Orders() {
     } finally {
       setLoading(false);
     }
-  }, [governance]);
+  }, [orderController]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -68,27 +68,27 @@ export default function Orders() {
   });
 
   async function handleAccept(orderId) {
-    await sendTx("Accept Promotion", governance.acceptPromotionGrant(orderId));
+    await sendTx("Accept Promotion", orderController.acceptPromotionGrant(orderId));
     load();
   }
   async function handleExecute(orderId) {
-    await sendTx("Execute Order", governance.executeOrder(orderId));
+    await sendTx("Execute Order", orderController.executeOrder(orderId));
     load();
   }
   async function handleBlock(orderId) {
-    await sendTx("Block Order", governance.blockOrder(orderId));
+    await sendTx("Block Order", orderController.blockOrder(orderId));
     load();
   }
   async function handleRescind(orderId) {
-    await sendTx("Rescind Order", governance.rescindOrder(orderId));
+    await sendTx("Rescind Order", orderController.rescindOrder(orderId));
     load();
   }
 
   async function handleCreate() {
     let txP;
-    if (orderType === 0) txP = governance.issuePromotionGrant(Number(target), Number(rank));
-    else if (orderType === 1) txP = governance.issueDemotionOrder(Number(target));
-    else if (orderType === 2) txP = governance.issueAuthorityOrder(Number(target), authority);
+    if (orderType === 0) txP = orderController.issuePromotionGrant(Number(target), Number(rank));
+    else if (orderType === 1) txP = orderController.issueDemotionOrder(Number(target));
+    else if (orderType === 2) txP = orderController.issueAuthorityOrder(Number(target), authority);
     else return;
     await sendTx("Issue Order", txP);
     setShowCreate(false);

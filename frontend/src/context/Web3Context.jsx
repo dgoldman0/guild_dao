@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { BrowserProvider, Contract } from "ethers";
-import { DAO_ABI, GOVERNANCE_ABI, INVITE_CONTROLLER_ABI, TREASURY_ABI, FEE_ROUTER_ABI } from "../contracts/abis";
+import { DAO_ABI, ORDER_CONTROLLER_ABI, PROPOSAL_CONTROLLER_ABI, INVITE_CONTROLLER_ABI, TREASURY_ABI, FEE_ROUTER_ABI } from "../contracts/abis";
 import { getAddresses } from "../contracts/config";
 import { EPOCH_SECONDS } from "../lib/constants";
 import { decodeContractError } from "../lib/errors";
@@ -20,7 +20,8 @@ export function Web3Provider({ children }) {
 
   // ── Contracts ────────────────────────────────
   const [dao, setDao] = useState(null);
-  const [governance, setGovernance] = useState(null);
+  const [orderController, setOrderController] = useState(null);
+  const [proposalController, setProposalController] = useState(null);
   const [inviteController, setInviteController] = useState(null);
   const [treasury, setTreasury] = useState(null);
   const [feeRouter, setFeeRouter] = useState(null);
@@ -92,7 +93,8 @@ export function Web3Provider({ children }) {
     setSigner(null);
     setProvider(null);
     setDao(null);
-    setGovernance(null);
+    setOrderController(null);
+    setProposalController(null);
     setInviteController(null);
     setTreasury(null);
     setFeeRouter(null);
@@ -131,7 +133,8 @@ export function Web3Provider({ children }) {
     }
     try {
       setDao(new Contract(addrs.dao, DAO_ABI, signer));
-      setGovernance(new Contract(addrs.governance, GOVERNANCE_ABI, signer));
+      setOrderController(new Contract(addrs.orderController, ORDER_CONTROLLER_ABI, signer));
+      setProposalController(new Contract(addrs.proposalController, PROPOSAL_CONTROLLER_ABI, signer));
       setInviteController(addrs.inviteController && addrs.inviteController !== zero
         ? new Contract(addrs.inviteController, INVITE_CONTROLLER_ABI, signer)
         : null);
@@ -250,7 +253,8 @@ export function Web3Provider({ children }) {
       provider,
       signer,
       dao,
-      governance,
+      orderController,
+      proposalController,
       inviteController,
       treasury,
       feeRouter,
@@ -273,7 +277,7 @@ export function Web3Provider({ children }) {
     }),
     [
       account, chainId, provider, signer,
-      dao, governance, inviteController, treasury, feeRouter,
+      dao, orderController, proposalController, inviteController, treasury, feeRouter,
       myMemberId, myMember, myPower, myActive, myFeePaidUntil,
       daoState, loading, error, toast,
       connect, disconnect, refresh, sendTx, showToast,
