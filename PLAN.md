@@ -2,14 +2,18 @@
 
 _Last updated: 2026-02-09_
 
-Current architecture: 4 contracts + 1 library + 2 interfaces.
+Current architecture: 8 contracts.
 
-| Contract | Bytecode | Status |
+| Contract | Role | Status |
 |---|---|---|
-| RankedMembershipDAO | ✅ under 24 KB | Deployed |
-| GovernanceController | ✅ under 24 KB | Deployed |
-| MembershipTreasury | ✅ under 24 KB | Deployed |
-| TreasurerModule | ✅ under 24 KB | Deployed |
+| RankedMembershipDAO | Core membership + params | Deployed |
+| GuildController | Sole DAO controller (facade) | Deployed |
+| OrderController | Timelocked rank/authority orders | Deployed |
+| ProposalController | Governance proposals | Deployed |
+| InviteController | Invite-based member onboarding | Deployed |
+| MembershipTreasury | Treasury proposals + execution | Deployed |
+| TreasurerModule | Treasury action logic | Deployed |
+| FeeRouter | Fee payment routing | Deployed |
 
 ---
 
@@ -18,7 +22,7 @@ Current architecture: 4 contracts + 1 library + 2 interfaces.
 **Commit:** `bb94ccf` — `feat: order limits per rank & rescindOrder`
 
 - Added `orderLimitOfRank()` to DAO (E=1, D=2, C=4… doubling pattern).
-- Added `activeOrdersOf` tracking in GovernanceController.
+- Added `activeOrdersOf` tracking in OrderController.
 - Enforced per-rank concurrent order cap on all 3 order types.
 - Decremented active count on execute, block, rescind, and governance-block.
 - Added `rescindOrder()` — issuer cancels their own pending order.

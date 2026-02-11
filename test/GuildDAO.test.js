@@ -38,7 +38,7 @@ const PType = {
 };
 
 describe("Guild DAO System", function () {
-  let dao, orders, proposals, inviteController, treasurerModule, treasury, feeRouter;
+  let dao, guild, orders, proposals, inviteController, treasurerModule, treasury, feeRouter;
   let owner, member1, member2, outsider, extra1, extra2, extra3;
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
@@ -95,16 +95,21 @@ describe("Guild DAO System", function () {
     dao = await RankedMembershipDAO.deploy();
     await dao.waitForDeployment();
 
+    const GuildController = await ethers.getContractFactory("GuildController");
+    guild = await GuildController.deploy(await dao.getAddress());
+    await guild.waitForDeployment();
+
     const OrderController = await ethers.getContractFactory("OrderController");
-    orders = await OrderController.deploy(await dao.getAddress());
+    orders = await OrderController.deploy(await dao.getAddress(), await guild.getAddress());
     await orders.waitForDeployment();
 
     const ProposalController = await ethers.getContractFactory("ProposalController");
-    proposals = await ProposalController.deploy(await dao.getAddress(), await orders.getAddress());
+    proposals = await ProposalController.deploy(await dao.getAddress(), await orders.getAddress(), await guild.getAddress());
     await proposals.waitForDeployment();
 
-    await dao.setController(await proposals.getAddress());
-    await dao.setOrderController(await orders.getAddress());
+    await dao.setController(await guild.getAddress());
+    await guild.setOrderController(await orders.getAddress());
+    await guild.setProposalController(await proposals.getAddress());
     await orders.setProposalController(await proposals.getAddress());
 
     const TreasurerModule = await ethers.getContractFactory("TreasurerModule");
@@ -136,8 +141,9 @@ describe("Guild DAO System", function () {
   //  Deployment
   // ══════════════════════════════════════════════════════════
   describe("Deployment", function () {
-    it("deploys all contracts including split controllers", async function () {
+    it("deploys all contracts including GuildController and split controllers", async function () {
       expect(await dao.getAddress()).to.be.properAddress;
+      expect(await guild.getAddress()).to.be.properAddress;
       expect(await orders.getAddress()).to.be.properAddress;
       expect(await proposals.getAddress()).to.be.properAddress;
       expect(await inviteController.getAddress()).to.be.properAddress;
@@ -146,12 +152,16 @@ describe("Guild DAO System", function () {
       expect(await feeRouter.getAddress()).to.be.properAddress;
     });
 
-    it("links controller (ProposalController) to DAO", async function () {
-      expect(await dao.controller()).to.equal(await proposals.getAddress());
+    it("links GuildController as sole DAO controller", async function () {
+      expect(await dao.controller()).to.equal(await guild.getAddress());
     });
 
-    it("links orderController to DAO", async function () {
-      expect(await dao.orderController()).to.equal(await orders.getAddress());
+    it("links orderController on GuildController", async function () {
+      expect(await guild.orderController()).to.equal(await orders.getAddress());
+    });
+
+    it("links proposalController on GuildController", async function () {
+      expect(await guild.proposalController()).to.equal(await proposals.getAddress());
     });
 
     it("links inviteController to DAO", async function () {

@@ -13,12 +13,13 @@ pragma solidity ^0.8.24;
       - Rescind by issuer
       - Block-by-governance (called by ProposalController)
 
-    This contract is set as the `orderController` on the DAO, giving it
-    authority to call setRank() and setAuthority().
+    This contract calls setRank() and setAuthority() through the
+    GuildController (the DAO's sole controller).
 */
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
+import {GuildController} from "./GuildController.sol";
 
 contract OrderController is ReentrancyGuard {
 
@@ -27,6 +28,7 @@ contract OrderController is ReentrancyGuard {
     // ================================================================
 
     RankedMembershipDAO public immutable dao;
+    GuildController public immutable guildCtrl;
 
     /// @notice The ProposalController address — allowed to call blockOrderByGovernance().
     address public proposalController;
@@ -102,9 +104,11 @@ contract OrderController is ReentrancyGuard {
     //                        CONSTRUCTOR
     // ================================================================
 
-    constructor(address daoAddress) {
+    constructor(address daoAddress, address guildControllerAddress) {
         if (daoAddress == address(0)) revert InvalidAddress();
+        if (guildControllerAddress == address(0)) revert InvalidAddress();
         dao = RankedMembershipDAO(payable(daoAddress));
+        guildCtrl = GuildController(guildControllerAddress);
     }
 
     // ================================================================
@@ -362,7 +366,7 @@ contract OrderController is ReentrancyGuard {
         RankedMembershipDAO.Rank targetRank = _getMemberRank(targetId);
         if (_rankIndex(o.newRank) <= _rankIndex(targetRank)) revert InvalidPromotion();
 
-        dao.setRank(targetId, o.newRank, callerId, false);
+        guildCtrl.setRank(targetId, o.newRank, callerId, false);
 
         o.executed = true;
         _decrementActiveOrders(o.issuerId);
@@ -386,11 +390,11 @@ contract OrderController is ReentrancyGuard {
             RankedMembershipDAO.Rank cur = _getMemberRank(targetId);
             if (_rankIndex(cur) > 0) {
                 RankedMembershipDAO.Rank newRank = RankedMembershipDAO.Rank(uint8(cur) - 1);
-                dao.setRank(targetId, newRank, o.issuerId, false);
+                guildCtrl.setRank(targetId, newRank, o.issuerId, false);
             }
         } else if (o.orderType == OrderType.AuthorityOrder) {
             if (dao.memberIdByAuthority(o.newAuthority) != 0) revert AlreadyMember();
-            dao.setAuthority(targetId, o.newAuthority, o.issuerId, false);
+            guildCtrl.setAuthority(targetId, o.newAuthority, o.issuerId, false);
         } else {
             revert OrderWrongType();
         }

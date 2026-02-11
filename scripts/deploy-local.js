@@ -4,7 +4,7 @@ const hre = require("hardhat");
   deploy-local.js  —  Full local deploy + populate for frontend testing.
 
   Boots a Hardhat-node world with:
-    • All 7 contracts deployed & wired
+    • All 8 contracts deployed & wired (incl. GuildController facade)
     • User's real address bootstrapped as SSS
     • 8 additional members at various ranks (using Hardhat signers)
     • Fee config enabled (ETH, 0.01 ETH base, 7-day grace)
@@ -34,16 +34,23 @@ async function main() {
   const daoAddr = await dao.getAddress();
   console.log("   ✅", daoAddr);
 
+  console.log("🛡️  Deploying GuildController…");
+  const GC = await hre.ethers.getContractFactory("GuildController");
+  const guildCtrl = await GC.deploy(daoAddr);
+  await guildCtrl.waitForDeployment();
+  const guildCtrlAddr = await guildCtrl.getAddress();
+  console.log("   ✅", guildCtrlAddr);
+
   console.log("⚔️  Deploying OrderController…");
   const ORD = await hre.ethers.getContractFactory("OrderController");
-  const orderCtrl = await ORD.deploy(daoAddr);
+  const orderCtrl = await ORD.deploy(daoAddr, guildCtrlAddr);
   await orderCtrl.waitForDeployment();
   const orderCtrlAddr = await orderCtrl.getAddress();
   console.log("   ✅", orderCtrlAddr);
 
   console.log("🗳️  Deploying ProposalController…");
   const PROP = await hre.ethers.getContractFactory("ProposalController");
-  const proposalCtrl = await PROP.deploy(daoAddr, orderCtrlAddr);
+  const proposalCtrl = await PROP.deploy(daoAddr, orderCtrlAddr, guildCtrlAddr);
   await proposalCtrl.waitForDeployment();
   const proposalCtrlAddr = await proposalCtrl.getAddress();
   console.log("   ✅", proposalCtrlAddr);
@@ -81,8 +88,9 @@ async function main() {
   console.log("\n🔗 Wiring contracts…");
   await (await treasury.setTreasurerModule(modAddr)).wait();
   await (await mod.setTreasury(treasuryAddr)).wait();
-  await (await dao.setController(proposalCtrlAddr)).wait();
-  await (await dao.setOrderController(orderCtrlAddr)).wait();
+  await (await dao.setController(guildCtrlAddr)).wait();
+  await (await guildCtrl.setOrderController(orderCtrlAddr)).wait();
+  await (await guildCtrl.setProposalController(proposalCtrlAddr)).wait();
   await (await orderCtrl.setProposalController(proposalCtrlAddr)).wait();
   await (await dao.setFeeRouter(feeRouterAddr)).wait();
   await (await dao.setInviteController(inviteControllerAddr)).wait();
@@ -203,6 +211,7 @@ async function main() {
   console.log("  🎉  LOCAL DEPLOYMENT COMPLETE");
   console.log("══════════════════════════════════════════════════════════");
   console.log("  RankedMembershipDAO:  ", daoAddr);
+  console.log("  GuildController:      ", guildCtrlAddr);
   console.log("  OrderController:      ", orderCtrlAddr);
   console.log("  ProposalController:   ", proposalCtrlAddr);
   console.log("  InviteController:     ", inviteControllerAddr);
@@ -222,7 +231,7 @@ async function main() {
   console.log("  → Then open the frontend at  http://localhost:5173\n");
 
   // ─────────── Output JSON for easy config patching ───────────
-  const addresses = { dao: daoAddr, orderController: orderCtrlAddr, proposalController: proposalCtrlAddr, inviteController: inviteControllerAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
+  const addresses = { dao: daoAddr, guildController: guildCtrlAddr, orderController: orderCtrlAddr, proposalController: proposalCtrlAddr, inviteController: inviteControllerAddr, treasury: treasuryAddr, feeRouter: feeRouterAddr };
   console.log("ADDRESSES_JSON=" + JSON.stringify(addresses));
 }
 

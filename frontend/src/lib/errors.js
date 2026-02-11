@@ -4,7 +4,8 @@ import { id as keccak256 } from "ethers";
   Solidity custom-error decoder for The Guild DAO contracts.
 
   Maps 4-byte selectors to human-readable titles + actionable descriptions.
-  Covers all custom errors across RankedMembershipDAO, GovernanceController,
+  Covers all custom errors across RankedMembershipDAO, GuildController,
+  OrderController, ProposalController,
   MembershipTreasury, TreasurerModule, and FeeRouter.
 */
 
@@ -54,7 +55,7 @@ const ERROR_CATALOG = {
   },
   "NotController()": {
     title: "Not Authorized",
-    hint: "Only the ProposalController or OrderController can perform this action.",
+    hint: "Only the GuildController can perform this action on the DAO.",
   },
   "NotProposalController()": {
     title: "Not Proposal Controller",

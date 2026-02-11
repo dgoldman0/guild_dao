@@ -12,15 +12,16 @@ pragma solidity ^0.8.24;
       - Execution of passed proposals (calls DAO setters or OrderController bridge)
       - BlockOrder proposals (delegates to OrderController.blockOrderByGovernance)
 
-    This contract is set as the `controller` on the DAO, giving it authority
-    to call setRank(), setAuthority(), governance parameter setters,
-    transferERC20(), and resetBootstrapFee().
+    This contract calls DAO mutators through the GuildController (the DAO's
+    sole controller).  It also calls OrderController.blockOrderByGovernance()
+    directly for BlockOrder proposals.
 */
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
 import {OrderController} from "./OrderController.sol";
+import {GuildController} from "./GuildController.sol";
 
 contract ProposalController is ReentrancyGuard {
     using SafeCast for uint256;
@@ -31,6 +32,7 @@ contract ProposalController is ReentrancyGuard {
 
     RankedMembershipDAO public immutable dao;
     OrderController public immutable orderCtrl;
+    GuildController public immutable guildCtrl;
 
     // ================================================================
     //                          ERRORS
@@ -121,11 +123,13 @@ contract ProposalController is ReentrancyGuard {
     //                        CONSTRUCTOR
     // ================================================================
 
-    constructor(address daoAddress, address orderControllerAddress) {
+    constructor(address daoAddress, address orderControllerAddress, address guildControllerAddress) {
         if (daoAddress == address(0)) revert InvalidAddress();
         if (orderControllerAddress == address(0)) revert InvalidAddress();
+        if (guildControllerAddress == address(0)) revert InvalidAddress();
         dao = RankedMembershipDAO(payable(daoAddress));
         orderCtrl = OrderController(orderControllerAddress);
+        guildCtrl = GuildController(guildControllerAddress);
     }
 
     // ================================================================
@@ -365,34 +369,34 @@ contract ProposalController is ReentrancyGuard {
         }
 
         if (p.proposalType == ProposalType.TransferERC20) {
-            dao.transferERC20(p.erc20Token, p.erc20Recipient, p.erc20Amount);
+            guildCtrl.transferERC20(p.erc20Token, p.erc20Recipient, p.erc20Amount);
             return;
         }
 
         // Parameter changes
         if (p.proposalType == ProposalType.ChangeVotingPeriod) {
-            dao.setVotingPeriod(p.parameterValue);
+            guildCtrl.setVotingPeriod(p.parameterValue);
             return;
         }
         if (p.proposalType == ProposalType.ChangeQuorumBps) {
-            dao.setQuorumBps(uint16(p.parameterValue));
+            guildCtrl.setQuorumBps(uint16(p.parameterValue));
             return;
         }
         if (p.proposalType == ProposalType.ChangeOrderDelay) {
-            dao.setOrderDelay(p.parameterValue);
+            guildCtrl.setOrderDelay(p.parameterValue);
             return;
         }
         if (p.proposalType == ProposalType.ChangeInviteExpiry) {
-            dao.setInviteExpiry(p.parameterValue);
+            guildCtrl.setInviteExpiry(p.parameterValue);
             return;
         }
         if (p.proposalType == ProposalType.ChangeExecutionDelay) {
-            dao.setExecutionDelay(p.parameterValue);
+            guildCtrl.setExecutionDelay(p.parameterValue);
             return;
         }
 
         if (p.proposalType == ProposalType.ResetBootstrapFee) {
-            dao.resetBootstrapFee(p.targetId);
+            guildCtrl.resetBootstrapFee(p.targetId);
             return;
         }
 
@@ -404,14 +408,14 @@ contract ProposalController is ReentrancyGuard {
         if (p.proposalType == ProposalType.GrantRank) {
             RankedMembershipDAO.Rank targetRank = _getMemberRank(targetId);
             if (_rankIndex(p.rankValue) <= _rankIndex(targetRank)) revert InvalidRank();
-            dao.setRank(targetId, p.rankValue, p.proposerId, true);
+            guildCtrl.setRank(targetId, p.rankValue, p.proposerId, true);
         } else if (p.proposalType == ProposalType.DemoteRank) {
             RankedMembershipDAO.Rank targetRank = _getMemberRank(targetId);
             if (_rankIndex(p.rankValue) >= _rankIndex(targetRank)) revert InvalidRank();
-            dao.setRank(targetId, p.rankValue, p.proposerId, true);
+            guildCtrl.setRank(targetId, p.rankValue, p.proposerId, true);
         } else if (p.proposalType == ProposalType.ChangeAuthority) {
             if (dao.memberIdByAuthority(p.addressValue) != 0) revert AlreadyMember();
-            dao.setAuthority(targetId, p.addressValue, p.proposerId, true);
+            guildCtrl.setAuthority(targetId, p.addressValue, p.proposerId, true);
         }
     }
 

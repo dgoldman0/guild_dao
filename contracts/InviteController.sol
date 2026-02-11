@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 /*
     InviteController — Membership invite system for the RankedMembershipDAO.
 
-    Extracted from GovernanceController to keep each contract under the
+    Extracted from the governance layer to keep each contract under the
     EIP-170 bytecode size limit (24 576 bytes).
 
     Manages:

@@ -10,13 +10,14 @@ pragma solidity ^0.8.24;
       - Rank math helpers (votingPowerOfRank, inviteAllowanceOfRank, proposalLimitOfRank)
       - Configurable governance parameters (votingPeriod, quorumBps, etc.)
       - Bootstrap controls for initial member seeding
-      - Controller authorization: ProposalController (governance params, proposals),
-        OrderController (rank/authority via timelocked orders), and InviteController
-        (invite-based member additions).
+      - Controller authorization: a single GuildController that mediates access
+        from the OrderController (timelocked rank/authority orders) and
+        ProposalController (democratic governance proposals).  InviteController
+        handles invite-based member additions separately.
 
-    The controllers are set via `setController()`, `setOrderController()`, and
-    `setInviteController()` (owner or controller).  MembershipTreasury reads
-    this contract through the IRankedMembershipDAO interface.
+    The GuildController is set via `setController()` (owner or controller).
+    InviteController is set via `setInviteController()`.  MembershipTreasury
+    reads this contract through the IRankedMembershipDAO interface.
 */
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -151,7 +152,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     bool public bootstrapFinalized;
 
     // ================================================================
-    //                   CONTROLLER (ProposalController)
+    //                   CONTROLLER (GuildController)
     // ================================================================
 
     address public controller;
@@ -179,12 +180,6 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     address public inviteController;
 
     // ================================================================
-    //              ORDER CONTROLLER (for rank/authority orders)
-    // ================================================================
-
-    address public orderController;
-
-    // ================================================================
     //                          EVENTS
     // ================================================================
 
@@ -192,7 +187,6 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     event BootstrapFinalized();
     event ControllerSet(address indexed controller);
     event InviteControllerSet(address indexed inviteController);
-    event OrderControllerSet(address indexed orderController);
 
     event MemberJoined(uint32 indexed memberId, address indexed authority, Rank rank);
     event AuthorityChanged(
@@ -250,9 +244,9 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         renounceOwnership();
     }
 
-    /// @notice Set the GovernanceController address.
+    /// @notice Set the GuildController address.
     ///         Callable by the owner (during bootstrap) or by the current controller
-    ///         (to migrate to a new controller via governance).
+    ///         (to migrate to a new GuildController via governance).
     function setController(address _controller) external {
         if (msg.sender != owner() && msg.sender != controller) revert NotController();
         if (_controller == address(0)) revert InvalidAddress();
@@ -278,32 +272,23 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit InviteControllerSet(_inviteController);
     }
 
-    /// @notice Set the OrderController address (authorized to call setRank/setAuthority for orders).
-    ///         Callable by the owner (during bootstrap) or by the current controller.
-    function setOrderController(address _orderController) external {
-        if (msg.sender != owner() && msg.sender != controller) revert NotController();
-        if (_orderController == address(0)) revert InvalidAddress();
-        orderController = _orderController;
-        emit OrderControllerSet(_orderController);
-    }
-
     // ================================================================
-    //    CONTROLLER-ONLY MUTATIONS (called by ProposalController / OrderController)
+    //    CONTROLLER-ONLY MUTATIONS (called via GuildController)
     // ================================================================
 
-    /// @notice Set a member's rank. Callable by the controller or orderController.
+    /// @notice Set a member's rank. Only callable by the controller (GuildController).
     function setRank(uint32 memberId, Rank newRank, uint32 byMemberId, bool viaGovernance)
         external
+        onlyController
     {
-        if (msg.sender != controller && msg.sender != orderController) revert NotController();
         _setRank(memberId, newRank, byMemberId, viaGovernance);
     }
 
-    /// @notice Set a member's authority address. Callable by the controller or orderController.
+    /// @notice Set a member's authority address. Only callable by the controller (GuildController).
     function setAuthority(uint32 memberId, address newAuthority, uint32 byMemberId, bool viaGovernance)
         external
+        onlyController
     {
-        if (msg.sender != controller && msg.sender != orderController) revert NotController();
         _setAuthority(memberId, newAuthority, byMemberId, viaGovernance);
     }
 
