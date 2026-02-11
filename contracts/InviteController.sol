@@ -9,15 +9,16 @@ pragma solidity ^0.8.24;
 
     Manages:
       - Invite issuance (per-epoch allowance by rank)
-      - Invite acceptance (creates new G-rank member via DAO)
+      - Invite acceptance (creates new G-rank member via GuildController → DAO)
       - Invite reclaim (return allowance after expiry)
 
-    This contract is set as the `inviteController` on the DAO, giving it
-    authority to call addMember().
+    Registered as the `inviteController` on the GuildController, which
+    forwards the addMember() call to the DAO.
 */
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
+import {GuildController} from "./GuildController.sol";
 
 contract InviteController is ReentrancyGuard {
 
@@ -26,6 +27,7 @@ contract InviteController is ReentrancyGuard {
     // ================================================================
 
     RankedMembershipDAO public immutable dao;
+    GuildController public immutable guildCtrl;
 
     // ================================================================
     //                          ERRORS
@@ -77,9 +79,11 @@ contract InviteController is ReentrancyGuard {
     //                        CONSTRUCTOR
     // ================================================================
 
-    constructor(address daoAddress) {
+    constructor(address daoAddress, address guildControllerAddress) {
         if (daoAddress == address(0)) revert InvalidAddress();
+        if (guildControllerAddress == address(0)) revert InvalidAddress();
         dao = RankedMembershipDAO(payable(daoAddress));
+        guildCtrl = GuildController(guildControllerAddress);
     }
 
     // ================================================================
@@ -151,8 +155,8 @@ contract InviteController is ReentrancyGuard {
 
         inv.claimed = true;
 
-        // Create member via DAO (inviteController is authorized for addMember)
-        newMemberId = dao.addMember(msg.sender);
+        // Create member via GuildController → DAO (inviteController is authorized)
+        newMemberId = guildCtrl.addMember(msg.sender);
 
         emit InviteClaimed(inviteId, newMemberId, msg.sender);
     }

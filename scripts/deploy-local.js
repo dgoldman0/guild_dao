@@ -78,7 +78,7 @@ async function main() {
 
   console.log("🎟️  Deploying InviteController…");
   const INV = await hre.ethers.getContractFactory("InviteController");
-  const inviteController = await INV.deploy(daoAddr);
+  const inviteController = await INV.deploy(daoAddr, guildCtrlAddr);
   await inviteController.waitForDeployment();
   const inviteControllerAddr = await inviteController.getAddress();
   console.log("   ✅", inviteControllerAddr);
@@ -93,7 +93,7 @@ async function main() {
   await (await guildCtrl.setProposalController(proposalCtrlAddr)).wait();
   await (await orderCtrl.setProposalController(proposalCtrlAddr)).wait();
   await (await dao.setFeeRouter(feeRouterAddr)).wait();
-  await (await dao.setInviteController(inviteControllerAddr)).wait();
+  await (await guildCtrl.setInviteController(inviteControllerAddr)).wait();
   await (await dao.setPayoutTreasury(treasuryAddr)).wait();
   console.log("   ✅ All wired");
 

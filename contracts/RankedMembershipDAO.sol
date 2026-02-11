@@ -11,13 +11,13 @@ pragma solidity ^0.8.24;
       - Configurable governance parameters (votingPeriod, quorumBps, etc.)
       - Bootstrap controls for initial member seeding
       - Controller authorization: a single GuildController that mediates access
-        from the OrderController (timelocked rank/authority orders) and
-        ProposalController (democratic governance proposals).  InviteController
-        handles invite-based member additions separately.
+        from the OrderController (timelocked rank/authority orders),
+        ProposalController (democratic governance proposals), and
+        InviteController (invite-based member additions).
 
     The GuildController is set via `setController()` (owner or controller).
-    InviteController is set via `setInviteController()`.  MembershipTreasury
-    reads this contract through the IRankedMembershipDAO interface.
+    MembershipTreasury reads this contract through the IRankedMembershipDAO
+    interface.
 */
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -174,19 +174,12 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     // ================================================================
-    //                   INVITE CONTROLLER (for invite-based addMember)
-    // ================================================================
-
-    address public inviteController;
-
-    // ================================================================
     //                          EVENTS
     // ================================================================
 
     event BootstrapMember(uint32 indexed memberId, address indexed authority, Rank rank);
     event BootstrapFinalized();
     event ControllerSet(address indexed controller);
-    event InviteControllerSet(address indexed inviteController);
 
     event MemberJoined(uint32 indexed memberId, address indexed authority, Rank rank);
     event AuthorityChanged(
@@ -263,15 +256,6 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit FeeRouterSet(_feeRouter);
     }
 
-    /// @notice Set the InviteController address (authorized to call addMember for invites).
-    ///         Callable by the owner (during bootstrap) or by the current controller.
-    function setInviteController(address _inviteController) external {
-        if (msg.sender != owner() && msg.sender != controller) revert NotController();
-        if (_inviteController == address(0)) revert InvalidAddress();
-        inviteController = _inviteController;
-        emit InviteControllerSet(_inviteController);
-    }
-
     // ================================================================
     //    CONTROLLER-ONLY MUTATIONS (called via GuildController)
     // ================================================================
@@ -293,10 +277,9 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     /// @notice Register a new member at rank G.
-    ///         Callable by the controller (governance) or the inviteController (invite flow).
+    ///         Callable by the controller (GuildController, on behalf of InviteController).
     /// @return newMemberId The ID of the newly created member.
-    function addMember(address authority) external returns (uint32 newMemberId) {
-        if (msg.sender != controller && msg.sender != inviteController) revert NotController();
+    function addMember(address authority) external onlyController returns (uint32 newMemberId) {
         if (authority == address(0)) revert InvalidAddress();
         if (memberIdByAuthority[authority] != 0) revert AlreadyMember();
 

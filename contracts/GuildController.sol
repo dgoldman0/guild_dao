@@ -4,17 +4,18 @@ pragma solidity ^0.8.24;
 /*
     GuildController — The sole controller of RankedMembershipDAO.
 
-    Acts as an authorization gateway: holds references to the two sub-controllers
-    (OrderController and ProposalController) and forwards their calls to the DAO
-    after verifying the caller is authorized.
+    Acts as an authorization gateway: holds references to the three
+    sub-controllers and forwards their calls to the DAO after verifying
+    the caller is authorized.
 
-      OrderController  ──┐
-                         ├──► GuildController ──► RankedMembershipDAO
-      ProposalController ┘
+      OrderController    ──┐
+      ProposalController ──┼──► GuildController ──► RankedMembershipDAO
+      InviteController   ──┘
 
-    setRank / setAuthority   → either sub-controller
+    setRank / setAuthority   → OrderController or ProposalController
     governance param setters → ProposalController only
     transferERC20, etc.      → ProposalController only
+    addMember                → InviteController only
 */
 
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
@@ -25,6 +26,7 @@ contract GuildController {
 
     address public orderController;
     address public proposalController;
+    address public inviteController;
 
     // ── Errors ─────────────────────────────────
     error NotAuthorized();
@@ -33,6 +35,7 @@ contract GuildController {
     // ── Events ─────────────────────────────────
     event OrderControllerSet(address indexed orderController);
     event ProposalControllerSet(address indexed proposalController);
+    event InviteControllerSet(address indexed inviteController);
 
     // ── Constructor ────────────────────────────
     constructor(address daoAddress) {
@@ -53,6 +56,11 @@ contract GuildController {
         _;
     }
 
+    modifier onlyInviteController() {
+        if (msg.sender != inviteController) revert NotAuthorized();
+        _;
+    }
+
     // ── Sub-controller setup ───────────────────
     //    DAO owner during bootstrap, proposalController after.
 
@@ -70,6 +78,14 @@ contract GuildController {
         if (_pc == address(0)) revert InvalidAddress();
         proposalController = _pc;
         emit ProposalControllerSet(_pc);
+    }
+
+    function setInviteController(address _ic) external {
+        if (msg.sender != dao.owner() && msg.sender != proposalController)
+            revert NotAuthorized();
+        if (_ic == address(0)) revert InvalidAddress();
+        inviteController = _ic;
+        emit InviteControllerSet(_ic);
     }
 
     // ── Forwarding: rank / authority (either sub-controller) ──
@@ -130,5 +146,13 @@ contract GuildController {
         external onlyProposalController
     {
         dao.setMemberActive(memberId, _active);
+    }
+
+    // ── Forwarding: invite (InviteController only) ──────────
+
+    function addMember(address authority)
+        external onlyInviteController returns (uint32)
+    {
+        return dao.addMember(authority);
     }
 }

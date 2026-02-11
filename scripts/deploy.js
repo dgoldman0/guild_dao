@@ -42,7 +42,7 @@ async function main() {
   // 5. Deploy InviteController
   console.log("\n🎟️  Deploying InviteController…");
   const INV = await hre.ethers.getContractFactory("InviteController");
-  const inviteCtrl = await INV.deploy(daoAddr);
+  const inviteCtrl = await INV.deploy(daoAddr, guildCtrlAddr);
   await inviteCtrl.waitForDeployment();
   const inviteCtrlAddr = await inviteCtrl.getAddress();
   console.log("✅ InviteController:", inviteCtrlAddr);
@@ -80,7 +80,7 @@ async function main() {
   tx = await guildCtrl.setOrderController(orderCtrlAddr);  await tx.wait();
   tx = await guildCtrl.setProposalController(proposalCtrlAddr);  await tx.wait();
   tx = await orderCtrl.setProposalController(proposalCtrlAddr);  await tx.wait();
-  tx = await dao.setInviteController(inviteCtrlAddr);  await tx.wait();
+  tx = await guildCtrl.setInviteController(inviteCtrlAddr);  await tx.wait();
   tx = await treasury.setTreasurerModule(modAddr);  await tx.wait();
   tx = await mod.setTreasury(treasuryAddr);  await tx.wait();
   tx = await dao.setFeeRouter(feeRouterAddr);  await tx.wait();
@@ -121,7 +121,7 @@ async function main() {
       ["GuildController", guildCtrlAddr, [daoAddr]],
       ["OrderController", orderCtrlAddr, [daoAddr, guildCtrlAddr]],
       ["ProposalController", proposalCtrlAddr, [daoAddr, orderCtrlAddr, guildCtrlAddr]],
-      ["InviteController", inviteCtrlAddr, [daoAddr]],
+      ["InviteController", inviteCtrlAddr, [daoAddr, guildCtrlAddr]],
       ["TreasurerModule", modAddr, [daoAddr]],
       ["MembershipTreasury", treasuryAddr, [daoAddr]],
       ["FeeRouter", feeRouterAddr, [daoAddr]],

@@ -131,10 +131,10 @@ describe("Guild DAO System", function () {
     await dao.setPayoutTreasury(await treasury.getAddress());
 
     const InviteController = await ethers.getContractFactory("InviteController");
-    inviteController = await InviteController.deploy(await dao.getAddress());
+    inviteController = await InviteController.deploy(await dao.getAddress(), await guild.getAddress());
     await inviteController.waitForDeployment();
 
-    await dao.setInviteController(await inviteController.getAddress());
+    await guild.setInviteController(await inviteController.getAddress());
   });
 
   // ══════════════════════════════════════════════════════════
@@ -164,8 +164,8 @@ describe("Guild DAO System", function () {
       expect(await guild.proposalController()).to.equal(await proposals.getAddress());
     });
 
-    it("links inviteController to DAO", async function () {
-      expect(await dao.inviteController()).to.equal(await inviteController.getAddress());
+    it("links inviteController on GuildController", async function () {
+      expect(await guild.inviteController()).to.equal(await inviteController.getAddress());
     });
 
     it("links treasury ↔ module", async function () {
