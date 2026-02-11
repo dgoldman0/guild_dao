@@ -22,3 +22,8 @@ typechain-types
 
 # Logs
 *.log
+
+# Security reports
+slither-report.json
+gas-report.txt
+.slither-cache/
