@@ -64,28 +64,28 @@ contract GuildController {
     // ── Sub-controller setup ───────────────────
     //    DAO owner during bootstrap, proposalController after.
 
-    function setOrderController(address _oc) external {
+    function setOrderController(address newOrderController) external {
         if (msg.sender != dao.owner() && msg.sender != proposalController)
             revert NotAuthorized();
-        if (_oc == address(0)) revert InvalidAddress();
-        orderController = _oc;
-        emit OrderControllerSet(_oc);
+        if (newOrderController == address(0)) revert InvalidAddress();
+        orderController = newOrderController;
+        emit OrderControllerSet(newOrderController);
     }
 
-    function setProposalController(address _pc) external {
+    function setProposalController(address newProposalController) external {
         if (msg.sender != dao.owner() && msg.sender != proposalController)
             revert NotAuthorized();
-        if (_pc == address(0)) revert InvalidAddress();
-        proposalController = _pc;
-        emit ProposalControllerSet(_pc);
+        if (newProposalController == address(0)) revert InvalidAddress();
+        proposalController = newProposalController;
+        emit ProposalControllerSet(newProposalController);
     }
 
-    function setInviteController(address _ic) external {
+    function setInviteController(address newInviteController) external {
         if (msg.sender != dao.owner() && msg.sender != proposalController)
             revert NotAuthorized();
-        if (_ic == address(0)) revert InvalidAddress();
-        inviteController = _ic;
-        emit InviteControllerSet(_ic);
+        if (newInviteController == address(0)) revert InvalidAddress();
+        inviteController = newInviteController;
+        emit InviteControllerSet(newInviteController);
     }
 
     // ── Forwarding: rank / authority (either sub-controller) ──
@@ -142,10 +142,10 @@ contract GuildController {
         dao.resetBootstrapFee(memberId);
     }
 
-    function setMemberActive(uint32 memberId, bool _active)
+    function setMemberActive(uint32 memberId, bool active)
         external onlyProposalController
     {
-        dao.setMemberActive(memberId, _active);
+        dao.setMemberActive(memberId, active);
     }
 
     // ── Forwarding: invite (InviteController only) ──────────

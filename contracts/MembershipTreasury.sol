@@ -20,14 +20,12 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {IRankedMembershipDAO} from "./interfaces/IRankedMembershipDAO.sol";
+import {ITreasurerModule} from "./interfaces/ITreasurerModule.sol";
 import {ActionTypes} from "./libraries/ActionTypes.sol";
 
-interface ITreasurerModule {
-    function executeTreasurerAction(uint8 actionType, bytes calldata data) external;
-}
-
-contract MembershipTreasury is ReentrancyGuard, Ownable {
+contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
     using SafeCast for uint256;
     using SafeERC20 for IERC20;
 
@@ -140,17 +138,17 @@ contract MembershipTreasury is ReentrancyGuard, Ownable {
 
     // ═══════════════════════════════ Constructor ══════════════════════════════
 
-    constructor(address _dao) Ownable(msg.sender) {
-        if (_dao == address(0)) revert InvalidAddress();
-        dao = IRankedMembershipDAO(_dao);
+    constructor(address daoAddress) Ownable(msg.sender) {
+        if (daoAddress == address(0)) revert InvalidAddress();
+        dao = IRankedMembershipDAO(daoAddress);
     }
 
     /// @notice Wire the TreasurerModule.  Owner-only, one-shot.
-    function setTreasurerModule(address _module) external onlyOwner {
-        if (_module == address(0)) revert InvalidAddress();
+    function setTreasurerModule(address moduleAddress) external onlyOwner {
+        if (moduleAddress == address(0)) revert InvalidAddress();
         if (treasurerModule != address(0)) revert ModuleAlreadySet();
-        treasurerModule = _module;
-        emit TreasurerModuleSet(_module);
+        treasurerModule = moduleAddress;
+        emit TreasurerModuleSet(moduleAddress);
     }
 
     // ═══════════════════════════════ Deposits ═════════════════════════════════

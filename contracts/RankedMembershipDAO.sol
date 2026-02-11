@@ -240,20 +240,20 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     /// @notice Set the GuildController address.
     ///         Callable by the owner (during bootstrap) or by the current controller
     ///         (to migrate to a new GuildController via governance).
-    function setController(address _controller) external {
+    function setController(address newController) external {
         if (msg.sender != owner() && msg.sender != controller) revert NotController();
-        if (_controller == address(0)) revert InvalidAddress();
-        controller = _controller;
-        emit ControllerSet(_controller);
+        if (newController == address(0)) revert InvalidAddress();
+        controller = newController;
+        emit ControllerSet(newController);
     }
 
     /// @notice Set the FeeRouter address (authorized to call recordFeePayment).
     ///         Callable by the owner (during bootstrap) or by the current controller.
-    function setFeeRouter(address _feeRouter) external {
+    function setFeeRouter(address newFeeRouter) external {
         if (msg.sender != owner() && msg.sender != controller) revert NotController();
-        if (_feeRouter == address(0)) revert InvalidAddress();
-        feeRouter = _feeRouter;
-        emit FeeRouterSet(_feeRouter);
+        if (newFeeRouter == address(0)) revert InvalidAddress();
+        feeRouter = newFeeRouter;
+        emit FeeRouterSet(newFeeRouter);
     }
 
     // ================================================================
@@ -383,17 +383,17 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     /// @notice Governance override to set member active status.
-    function setMemberActive(uint32 memberId, bool _active) external onlyController {
+    function setMemberActive(uint32 memberId, bool active) external onlyController {
         Member storage m = membersById[memberId];
         if (!m.exists) revert InvalidTarget();
 
-        if (_active && !memberActive[memberId]) {
+        if (active && !memberActive[memberId]) {
             memberActive[memberId] = true;
             uint224 power = votingPowerOfRank(m.rank);
             _writeMemberPower(memberId, power);
             _writeTotalPower(totalVotingPower() + power);
             emit MemberReactivated(memberId);
-        } else if (!_active && memberActive[memberId]) {
+        } else if (!active && memberActive[memberId]) {
             memberActive[memberId] = false;
             uint224 power = votingPowerOfRank(m.rank);
             _writeMemberPower(memberId, 0);

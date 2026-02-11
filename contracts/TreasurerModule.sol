@@ -20,9 +20,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IRankedMembershipDAO} from "./interfaces/IRankedMembershipDAO.sol";
 import {IMembershipTreasury} from "./interfaces/IMembershipTreasury.sol";
+import {ITreasurerModule} from "./interfaces/ITreasurerModule.sol";
 import {ActionTypes} from "./libraries/ActionTypes.sol";
 
-contract TreasurerModule is ReentrancyGuard {
+contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
 
     // ═══════════════════════════════ Constants ════════════════════════════════
 
@@ -36,7 +37,7 @@ contract TreasurerModule is ReentrancyGuard {
     // ═══════════════════════════════ Treasury link ════════════════════════════
 
     IMembershipTreasury public treasury;
-    address private _deployer;
+    address private immutable _deployer;
 
     // ═══════════════════════════════ Types ════════════════════════════════════
 
@@ -162,19 +163,19 @@ contract TreasurerModule is ReentrancyGuard {
 
     // ═══════════════════════════════ Constructor ══════════════════════════════
 
-    constructor(address _dao) {
-        if (_dao == address(0)) revert InvalidAddress();
-        dao = IRankedMembershipDAO(_dao);
+    constructor(address daoAddress) {
+        if (daoAddress == address(0)) revert InvalidAddress();
+        dao = IRankedMembershipDAO(daoAddress);
         _deployer = msg.sender;
     }
 
     /// @notice Link this module to the Treasury.  Deployer-only, one-shot.
-    function setTreasury(address _treasury) external {
+    function setTreasury(address treasuryAddress) external {
         if (msg.sender != _deployer) revert NotDeployer();
         if (address(treasury) != address(0)) revert TreasuryAlreadySet();
-        if (_treasury == address(0)) revert InvalidAddress();
-        treasury = IMembershipTreasury(_treasury);
-        emit TreasurySet(_treasury);
+        if (treasuryAddress == address(0)) revert InvalidAddress();
+        treasury = IMembershipTreasury(treasuryAddress);
+        emit TreasurySet(treasuryAddress);
     }
 
     // ═══════════════════════════════ Direct Spending ══════════════════════════

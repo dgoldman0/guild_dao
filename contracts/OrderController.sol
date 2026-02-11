@@ -117,12 +117,12 @@ contract OrderController is ReentrancyGuard {
 
     /// @notice Set the ProposalController address (authorized for blockOrderByGovernance).
     ///         Callable by the DAO owner (bootstrap) or the current proposalController.
-    function setProposalController(address _proposalController) external {
+    function setProposalController(address newProposalController) external {
         if (msg.sender != dao.owner() && msg.sender != dao.controller() && msg.sender != proposalController)
             revert NotProposalController();
-        if (_proposalController == address(0)) revert InvalidAddress();
-        proposalController = _proposalController;
-        emit ProposalControllerSet(_proposalController);
+        if (newProposalController == address(0)) revert InvalidAddress();
+        proposalController = newProposalController;
+        emit ProposalControllerSet(newProposalController);
     }
 
     // ================================================================
