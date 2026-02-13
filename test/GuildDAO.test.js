@@ -1482,4 +1482,974 @@ describe("Guild DAO System", function () {
       ).to.be.revertedWithCustomError(dao, "NotFeeRouter");
     });
   });
+
+  // ══════════════════════════════════════════════════════════
+  //  TreasurerModule — Member Treasurer (via proposals)
+  // ══════════════════════════════════════════════════════════
+  describe("TreasurerModule", function () {
+    let mockToken, mockNFT;
+    const ONE_ETH = ethers.parseEther("1");
+    const TEN_ETH = ethers.parseEther("10");
+    const PERIOD = 86400; // 1 day
+
+    beforeEach(async function () {
+      // Deploy token/NFT mocks
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      mockToken = await MockERC20.deploy("Test", "TST");
+      await mockToken.waitForDeployment();
+
+      const MockERC721 = await ethers.getContractFactory("MockERC721");
+      mockNFT = await MockERC721.deploy("TestNFT", "TNFT");
+      await mockNFT.waitForDeployment();
+
+      // Fund treasury with ETH and tokens
+      await owner.sendTransaction({ to: await treasury.getAddress(), value: ethers.parseEther("100") });
+      await mockToken.mint(await treasury.getAddress(), ethers.parseEther("1000"));
+    });
+
+    describe("Add/Update/Remove Member Treasurer", function () {
+      it("add member treasurer via proposal → direct spend ETH", async function () {
+        // SSS owner adds themselves as member-based treasurer
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const data = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, ONE_ETH, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, data);
+
+        // Verify treasurer config
+        const cfg = await treasurerModule.getMemberTreasurerConfig(ownerId);
+        expect(cfg.active).to.be.true;
+        expect(cfg.baseSpendingLimit).to.equal(TEN_ETH);
+
+        // Now spend ETH via direct call
+        const balBefore = await ethers.provider.getBalance(outsider.address);
+        await treasurerModule.connect(owner).treasurerSpendETH(outsider.address, ONE_ETH);
+        const balAfter = await ethers.provider.getBalance(outsider.address);
+        expect(balAfter - balBefore).to.equal(ONE_ETH);
+      });
+
+      it("update member treasurer via proposal", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        // Add first
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, ONE_ETH, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Update
+        const updData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, ethers.parseEther("20"), ethers.parseEther("2"), PERIOD * 2, Rank.F]
+        );
+        await treasuryProposalLifecycle(owner, AT.UPDATE_MEMBER_TREASURER, updData);
+
+        const cfg = await treasurerModule.getMemberTreasurerConfig(ownerId);
+        expect(cfg.baseSpendingLimit).to.equal(ethers.parseEther("20"));
+        expect(cfg.periodDuration).to.equal(PERIOD * 2);
+      });
+
+      it("remove member treasurer via proposal", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, ONE_ETH, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        const removeData = coder.encode(["uint32"], [ownerId]);
+        await treasuryProposalLifecycle(owner, AT.REMOVE_MEMBER_TREASURER, removeData);
+
+        const cfg = await treasurerModule.getMemberTreasurerConfig(ownerId);
+        expect(cfg.active).to.be.false;
+      });
+
+      it("spending limit resets after period expires", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const data = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, data);
+
+        // Spend up to limit
+        await treasurerModule.connect(owner).treasurerSpendETH(outsider.address, TEN_ETH);
+
+        // Should fail — limit reached
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendETH(outsider.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "TreasurerSpendingLimitExceeded");
+
+        // Advance past period
+        await ethers.provider.send("evm_increaseTime", [PERIOD + 1]);
+        await ethers.provider.send("evm_mine");
+
+        // Should succeed again
+        await treasurerModule.connect(owner).treasurerSpendETH(outsider.address, ONE_ETH);
+      });
+
+      it("non-treasurer cannot spend", async function () {
+        await expect(
+          treasurerModule.connect(outsider).treasurerSpendETH(owner.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "NotTreasurer");
+      });
+
+      it("spend reverts when treasury locked", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Lock treasury
+        const lockData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_TREASURY_LOCKED, lockData);
+
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendETH(outsider.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "TreasuryLocked");
+      });
+
+      it("spend ERC20 via member treasurer", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const data = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, data);
+
+        const tokenAddr = await mockToken.getAddress();
+        await treasurerModule.connect(owner).treasurerSpendERC20(tokenAddr, outsider.address, ONE_ETH);
+        expect(await mockToken.balanceOf(outsider.address)).to.equal(ONE_ETH);
+      });
+
+      it("member token config overrides base limit for ERC20", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const tokenAddr = await mockToken.getAddress();
+
+        // Add treasurer with high base limit
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, ethers.parseEther("100"), 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Set token config with low limit
+        const tokenCfgData = coder.encode(
+          ["uint32","address","uint256","uint256"],
+          [ownerId, tokenAddr, ONE_ETH, 0]
+        );
+        await treasuryProposalLifecycle(owner, AT.SET_MEMBER_TOKEN_CONFIG, tokenCfgData);
+
+        // Should fail if exceeding token-specific limit
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendERC20(tokenAddr, outsider.address, ethers.parseEther("2"))
+        ).to.be.revertedWithCustomError(treasurerModule, "TreasurerSpendingLimitExceeded");
+
+        // But should succeed within token limit
+        await treasurerModule.connect(owner).treasurerSpendERC20(tokenAddr, outsider.address, ONE_ETH);
+      });
+    });
+
+    describe("Add/Update/Remove Address Treasurer", function () {
+      it("add address-based treasurer → spend ETH", async function () {
+        const data = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, data);
+
+        const cfg = await treasurerModule.getAddressTreasurerConfig(outsider.address);
+        expect(cfg.active).to.be.true;
+
+        await treasurerModule.connect(outsider).treasurerSpendETH(extra1.address, ONE_ETH);
+        const bal = await ethers.provider.getBalance(extra1.address);
+        expect(bal).to.be.gt(ethers.parseEther("10000")); // started with 10k
+      });
+
+      it("update address treasurer", async function () {
+        const addData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, addData);
+
+        const updData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, ethers.parseEther("50"), PERIOD * 7]
+        );
+        await treasuryProposalLifecycle(owner, AT.UPDATE_ADDRESS_TREASURER, updData);
+
+        const cfg = await treasurerModule.getAddressTreasurerConfig(outsider.address);
+        expect(cfg.baseSpendingLimit).to.equal(ethers.parseEther("50"));
+      });
+
+      it("remove address treasurer → can no longer spend", async function () {
+        const addData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, addData);
+
+        const removeData = coder.encode(["address"], [outsider.address]);
+        await treasuryProposalLifecycle(owner, AT.REMOVE_ADDRESS_TREASURER, removeData);
+
+        await expect(
+          treasurerModule.connect(outsider).treasurerSpendETH(extra1.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "NotTreasurer");
+      });
+
+      it("address treasurer ERC20 spending with token config", async function () {
+        const tokenAddr = await mockToken.getAddress();
+        const addData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, addData);
+
+        // Set token-specific config
+        const tokenCfgData = coder.encode(
+          ["address","address","uint256"],
+          [outsider.address, tokenAddr, ethers.parseEther("5")]
+        );
+        await treasuryProposalLifecycle(owner, AT.SET_ADDRESS_TOKEN_CONFIG, tokenCfgData);
+
+        await treasurerModule.connect(outsider).treasurerSpendERC20(tokenAddr, extra1.address, ethers.parseEther("5"));
+        expect(await mockToken.balanceOf(extra1.address)).to.equal(ethers.parseEther("5"));
+
+        // Over limit should revert
+        await expect(
+          treasurerModule.connect(outsider).treasurerSpendERC20(tokenAddr, extra1.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "TreasurerSpendingLimitExceeded");
+      });
+    });
+
+    describe("Treasurer Call", function () {
+      it("treasurer can execute call to approved target", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const tokenAddr = await mockToken.getAddress();
+
+        // Add member treasurer
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Enable treasurer calls
+        const enableData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_TREASURER_CALLS_ENABLED, enableData);
+
+        // Add approved target
+        const approveData = coder.encode(["address"], [tokenAddr]);
+        await treasuryProposalLifecycle(owner, AT.ADD_APPROVED_CALL_TARGET, approveData);
+
+        // Execute call: transfer token from treasury
+        const callData = mockToken.interface.encodeFunctionData("transfer", [outsider.address, ONE_ETH]);
+        await treasurerModule.connect(owner).treasurerCall(tokenAddr, 0, callData);
+        expect(await mockToken.balanceOf(outsider.address)).to.equal(ONE_ETH);
+      });
+
+      it("reverts if calls not enabled", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        await expect(
+          treasurerModule.connect(owner).treasurerCall(outsider.address, 0, "0x")
+        ).to.be.revertedWithCustomError(treasurerModule, "TreasurerCallsDisabled");
+      });
+
+      it("reverts if target not approved", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Enable calls but don't approve target
+        const enableData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_TREASURER_CALLS_ENABLED, enableData);
+
+        await expect(
+          treasurerModule.connect(owner).treasurerCall(outsider.address, 0, "0x")
+        ).to.be.revertedWithCustomError(treasurerModule, "CallTargetNotApproved");
+      });
+    });
+
+    describe("NFT Access & Transfer", function () {
+      let nftAddr;
+      let tokenId;
+
+      beforeEach(async function () {
+        nftAddr = await mockNFT.getAddress();
+        // Mint an NFT to the treasury
+        const tx = await mockNFT.mint(await treasury.getAddress());
+        const receipt = await tx.wait();
+        tokenId = 0; // first mint
+      });
+
+      it("grant member NFT access → transfer NFT via treasurer", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+
+        // Also need a member treasurer for the check (the NFT check uses member lookup)
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Grant NFT access: 5 transfers per period
+        const grantData = coder.encode(
+          ["uint32","address","uint64","uint64","uint8"],
+          [ownerId, nftAddr, 5, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, grantData);
+
+        // Verify access
+        const access = await treasurerModule.getMemberNFTAccess(ownerId, nftAddr);
+        expect(access.hasAccess).to.be.true;
+        expect(access.transfersPerPeriod).to.equal(5);
+
+        // Transfer NFT
+        await treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, tokenId);
+        expect(await mockNFT.ownerOf(tokenId)).to.equal(outsider.address);
+      });
+
+      it("revoke member NFT access → transfer reverts", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        const grantData = coder.encode(
+          ["uint32","address","uint64","uint64","uint8"],
+          [ownerId, nftAddr, 5, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, grantData);
+
+        // Revoke
+        const revokeData = coder.encode(["uint32","address"], [ownerId, nftAddr]);
+        await treasuryProposalLifecycle(owner, AT.REVOKE_MEMBER_NFT_ACCESS, revokeData);
+
+        await expect(
+          treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, tokenId)
+        ).to.be.revertedWithCustomError(treasurerModule, "NoNFTAccess");
+      });
+
+      it("grant address NFT access → transfer NFT", async function () {
+        // Grant address-based NFT access to outsider
+        const grantData = coder.encode(
+          ["address","address","uint64","uint64"],
+          [outsider.address, nftAddr, 10, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_ADDRESS_NFT_ACCESS, grantData);
+
+        const access = await treasurerModule.getAddressNFTAccess(outsider.address, nftAddr);
+        expect(access.hasAccess).to.be.true;
+
+        // Also need address-based treasurer for the NFT transfer (spending check)
+        // Actually NFT transfer just checks NFT access, not treasurer config
+        await treasurerModule.connect(outsider).treasurerTransferNFT(nftAddr, extra1.address, tokenId);
+        expect(await mockNFT.ownerOf(tokenId)).to.equal(extra1.address);
+      });
+
+      it("revoke address NFT access → transfer reverts", async function () {
+        const grantData = coder.encode(
+          ["address","address","uint64","uint64"],
+          [outsider.address, nftAddr, 10, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_ADDRESS_NFT_ACCESS, grantData);
+
+        const revokeData = coder.encode(["address","address"], [outsider.address, nftAddr]);
+        await treasuryProposalLifecycle(owner, AT.REVOKE_ADDRESS_NFT_ACCESS, revokeData);
+
+        await expect(
+          treasurerModule.connect(outsider).treasurerTransferNFT(nftAddr, extra1.address, tokenId)
+        ).to.be.revertedWithCustomError(treasurerModule, "NoNFTAccess");
+      });
+
+      it("NFT transfer via proposal (TRANSFER_NFT action)", async function () {
+        const data = coder.encode(
+          ["address","address","uint256"],
+          [nftAddr, outsider.address, tokenId]
+        );
+        await treasuryProposalLifecycle(owner, AT.TRANSFER_NFT, data);
+        expect(await mockNFT.ownerOf(tokenId)).to.equal(outsider.address);
+      });
+
+      it("NFT transfer limit enforced per period", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Grant: 1 transfer per period
+        const grantData = coder.encode(
+          ["uint32","address","uint64","uint64","uint8"],
+          [ownerId, nftAddr, 1, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, grantData);
+
+        // First transfer succeeds
+        await treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, tokenId);
+
+        // Mint another NFT to treasury
+        await mockNFT.mint(await treasury.getAddress()); // tokenId=1
+        // Second transfer within same period should fail
+        await expect(
+          treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, 1)
+        ).to.be.revertedWithCustomError(treasurerModule, "NFTTransferLimitExceeded");
+
+        // Advance past period
+        await ethers.provider.send("evm_increaseTime", [PERIOD + 1]);
+        await ethers.provider.send("evm_mine");
+
+        // Should succeed after period reset
+        await treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, 1);
+      });
+    });
+
+    describe("Views", function () {
+      it("isTreasurer returns correct status", async function () {
+        const [isTreas,] = await treasurerModule.isTreasurer(outsider.address);
+        expect(isTreas).to.be.false;
+
+        // Add address treasurer
+        const addData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, addData);
+
+        const [isTreas2, tType] = await treasurerModule.isTreasurer(outsider.address);
+        expect(isTreas2).to.be.true;
+        expect(tType).to.equal(2); // AddressBased
+      });
+
+      it("getTreasurerRemainingLimit tracks spending", async function () {
+        const addData = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, addData);
+
+        const remaining1 = await treasurerModule.getTreasurerRemainingLimit(outsider.address);
+        expect(remaining1).to.equal(TEN_ETH);
+
+        await treasurerModule.connect(outsider).treasurerSpendETH(extra1.address, ethers.parseEther("3"));
+        const remaining2 = await treasurerModule.getTreasurerRemainingLimit(outsider.address);
+        expect(remaining2).to.equal(ethers.parseEther("7"));
+      });
+
+      it("hasNFTAccessView returns correct status", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        const [canTransfer] = await treasurerModule.hasNFTAccessView(outsider.address, nftAddr);
+        expect(canTransfer).to.be.false;
+      });
+    });
+
+    describe("Edge cases & reverts", function () {
+      it("treasurerSpendETH reverts with zero address", async function () {
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendETH(ethers.ZeroAddress, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "InvalidAddress");
+      });
+
+      it("treasurerSpendETH reverts with zero amount", async function () {
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendETH(outsider.address, 0)
+        ).to.be.revertedWithCustomError(treasurerModule, "ZeroAmount");
+      });
+
+      it("treasurerSpendERC20 reverts with zero token address", async function () {
+        await expect(
+          treasurerModule.connect(owner).treasurerSpendERC20(ethers.ZeroAddress, outsider.address, ONE_ETH)
+        ).to.be.revertedWithCustomError(treasurerModule, "InvalidAddress");
+      });
+
+      it("treasurerTransferNFT reverts with zero nft address", async function () {
+        await expect(
+          treasurerModule.connect(owner).treasurerTransferNFT(ethers.ZeroAddress, outsider.address, 0)
+        ).to.be.revertedWithCustomError(treasurerModule, "InvalidAddress");
+      });
+
+      it("treasurerCall reverts with zero target", async function () {
+        await expect(
+          treasurerModule.connect(owner).treasurerCall(ethers.ZeroAddress, 0, "0x")
+        ).to.be.revertedWithCustomError(treasurerModule, "InvalidAddress");
+      });
+
+      it("duplicate add member treasurer reverts", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const data = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, data);
+
+        // Second add should revert (TreasurerAlreadyExists)
+        // We'll just check the executeTreasurerAction revert
+        await expect(
+          treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, data)
+        ).to.be.reverted;
+      });
+
+      it("update inactive treasurer reverts", async function () {
+        const data = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [99, TEN_ETH, 0, PERIOD, Rank.G]
+        );
+        await expect(
+          treasuryProposalLifecycle(owner, AT.UPDATE_MEMBER_TREASURER, data)
+        ).to.be.reverted;
+      });
+
+      it("remove inactive treasurer reverts", async function () {
+        const removeData = coder.encode(["uint32"], [99]);
+        await expect(
+          treasuryProposalLifecycle(owner, AT.REMOVE_MEMBER_TREASURER, removeData)
+        ).to.be.reverted;
+      });
+
+      it("add duplicate address treasurer reverts", async function () {
+        const data = coder.encode(
+          ["address","uint256","uint64"],
+          [outsider.address, TEN_ETH, PERIOD]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, data);
+
+        await expect(
+          treasuryProposalLifecycle(owner, AT.ADD_ADDRESS_TREASURER, data)
+        ).to.be.reverted;
+      });
+
+      it("duplicate grant NFT access reverts", async function () {
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const nftAddr = await mockNFT.getAddress();
+        const data = coder.encode(
+          ["uint32","address","uint64","uint64","uint8"],
+          [ownerId, nftAddr, 5, PERIOD, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, data);
+        await expect(
+          treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, data)
+        ).to.be.reverted;
+      });
+
+      it("revoke non-existent NFT access reverts", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        const data = coder.encode(["uint32","address"], [99, nftAddr]);
+        await expect(
+          treasuryProposalLifecycle(owner, AT.REVOKE_MEMBER_NFT_ACCESS, data)
+        ).to.be.reverted;
+      });
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  //  MembershipTreasury — Untested functions
+  // ══════════════════════════════════════════════════════════
+  describe("MembershipTreasury (extended)", function () {
+    let mockToken, mockNFT;
+
+    beforeEach(async function () {
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      mockToken = await MockERC20.deploy("Test", "TST");
+      await mockToken.waitForDeployment();
+
+      const MockERC721 = await ethers.getContractFactory("MockERC721");
+      mockNFT = await MockERC721.deploy("TestNFT", "TNFT");
+      await mockNFT.waitForDeployment();
+    });
+
+    describe("NFT deposits & views", function () {
+      it("depositNFT transfers NFT to treasury", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        await mockNFT.mint(owner.address); // tokenId=0
+        const treasuryAddr = await treasury.getAddress();
+        await mockNFT.connect(owner).approve(treasuryAddr, 0);
+        await treasury.connect(owner).depositNFT(nftAddr, 0);
+        expect(await mockNFT.ownerOf(0)).to.equal(treasuryAddr);
+      });
+
+      it("depositNFT reverts with zero address", async function () {
+        await expect(
+          treasury.connect(owner).depositNFT(ethers.ZeroAddress, 0)
+        ).to.be.revertedWithCustomError(treasury, "InvalidAddress");
+      });
+
+      it("onERC721Received works via safeTransferFrom", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        await mockNFT.mint(owner.address);
+        const treasuryAddr = await treasury.getAddress();
+        // safeTransferFrom triggers onERC721Received
+        await mockNFT.connect(owner)["safeTransferFrom(address,address,uint256)"](
+          owner.address, treasuryAddr, 0
+        );
+        expect(await mockNFT.ownerOf(0)).to.equal(treasuryAddr);
+      });
+
+      it("ownsNFT returns true when treasury owns NFT", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        await mockNFT.mint(await treasury.getAddress());
+        expect(await treasury.ownsNFT(nftAddr, 0)).to.be.true;
+      });
+
+      it("ownsNFT returns false when treasury does not own NFT", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        await mockNFT.mint(owner.address);
+        expect(await treasury.ownsNFT(nftAddr, 0)).to.be.false;
+      });
+
+      it("ownsNFT returns false for invalid token", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        expect(await treasury.ownsNFT(nftAddr, 9999)).to.be.false;
+      });
+    });
+
+    describe("Module transfer functions (via treasurer direct spend)", function () {
+      it("moduleTransferERC20 works through treasurer spend", async function () {
+        const tokenAddr = await mockToken.getAddress();
+        await mockToken.mint(await treasury.getAddress(), ethers.parseEther("100"));
+
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, ethers.parseEther("50"), 0, 86400, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        await treasurerModule.connect(owner).treasurerSpendERC20(tokenAddr, outsider.address, ethers.parseEther("5"));
+        expect(await mockToken.balanceOf(outsider.address)).to.equal(ethers.parseEther("5"));
+      });
+
+      it("moduleTransferNFT works through treasurer NFT transfer", async function () {
+        const nftAddr = await mockNFT.getAddress();
+        await mockNFT.mint(await treasury.getAddress()); // tokenId=0
+
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, ethers.parseEther("10"), 0, 86400, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        const grantData = coder.encode(
+          ["uint32","address","uint64","uint64","uint8"],
+          [ownerId, nftAddr, 5, 86400, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.GRANT_MEMBER_NFT_ACCESS, grantData);
+
+        await treasurerModule.connect(owner).treasurerTransferNFT(nftAddr, outsider.address, 0);
+        expect(await mockNFT.ownerOf(0)).to.equal(outsider.address);
+      });
+
+      it("moduleCall works through treasurer call", async function () {
+        const tokenAddr = await mockToken.getAddress();
+        await mockToken.mint(await treasury.getAddress(), ethers.parseEther("100"));
+
+        const ownerId = await dao.memberIdByAuthority(owner.address);
+        const addData = coder.encode(
+          ["uint32","uint256","uint256","uint64","uint8"],
+          [ownerId, ethers.parseEther("10"), 0, 86400, Rank.G]
+        );
+        await treasuryProposalLifecycle(owner, AT.ADD_MEMBER_TREASURER, addData);
+
+        // Enable treasurer calls
+        const enableData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_TREASURER_CALLS_ENABLED, enableData);
+
+        // Approve token as call target
+        const approveData = coder.encode(["address"], [tokenAddr]);
+        await treasuryProposalLifecycle(owner, AT.ADD_APPROVED_CALL_TARGET, approveData);
+
+        const callData = mockToken.interface.encodeFunctionData("transfer", [outsider.address, ethers.parseEther("1")]);
+        await treasurerModule.connect(owner).treasurerCall(tokenAddr, 0, callData);
+        expect(await mockToken.balanceOf(outsider.address)).to.equal(ethers.parseEther("1"));
+      });
+    });
+
+    describe("CALL proposal action", function () {
+      it("execute CALL proposal to approved target", async function () {
+        const tokenAddr = await mockToken.getAddress();
+        await mockToken.mint(await treasury.getAddress(), ethers.parseEther("100"));
+
+        // Enable call actions
+        const enableData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_CALL_ACTIONS_ENABLED, enableData);
+
+        // Approve target
+        const approveData = coder.encode(["address"], [tokenAddr]);
+        await treasuryProposalLifecycle(owner, AT.ADD_APPROVED_CALL_TARGET, approveData);
+
+        // Execute CALL proposal
+        const callData = mockToken.interface.encodeFunctionData("transfer", [outsider.address, ethers.parseEther("1")]);
+        const proposalData = coder.encode(
+          ["address","uint256","bytes"],
+          [tokenAddr, 0, callData]
+        );
+        await treasuryProposalLifecycle(owner, AT.CALL, proposalData);
+        expect(await mockToken.balanceOf(outsider.address)).to.equal(ethers.parseEther("1"));
+      });
+
+      it("CALL reverts when call actions disabled", async function () {
+        const callData = coder.encode(
+          ["address","uint256","bytes"],
+          [outsider.address, 0, "0x"]
+        );
+        await expect(
+          treasuryProposalLifecycle(owner, AT.CALL, callData)
+        ).to.be.revertedWithCustomError(treasury, "ActionDisabled");
+      });
+
+      it("CALL reverts when target not approved", async function () {
+        // Enable call actions
+        const enableData = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_CALL_ACTIONS_ENABLED, enableData);
+
+        const callData = coder.encode(
+          ["address","uint256","bytes"],
+          [outsider.address, 0, "0x"]
+        );
+        await expect(
+          treasuryProposalLifecycle(owner, AT.CALL, callData)
+        ).to.be.revertedWithCustomError(treasury, "CallTargetNotApproved");
+      });
+    });
+
+    describe("Settings proposals", function () {
+      it("SET_TREASURER_CALLS_ENABLED full lifecycle", async function () {
+        const data = coder.encode(["bool"], [true]);
+        await treasuryProposalLifecycle(owner, AT.SET_TREASURER_CALLS_ENABLED, data);
+        expect(await treasury.treasurerCallsEnabled()).to.be.true;
+      });
+
+      it("ADD_APPROVED_CALL_TARGET & REMOVE_APPROVED_CALL_TARGET lifecycle", async function () {
+        const addData = coder.encode(["address"], [outsider.address]);
+        await treasuryProposalLifecycle(owner, AT.ADD_APPROVED_CALL_TARGET, addData);
+        expect(await treasury.approvedCallTargets(outsider.address)).to.be.true;
+
+        const removeData = coder.encode(["address"], [outsider.address]);
+        await treasuryProposalLifecycle(owner, AT.REMOVE_APPROVED_CALL_TARGET, removeData);
+        expect(await treasury.approvedCallTargets(outsider.address)).to.be.false;
+      });
+    });
+
+    describe("Admin functions", function () {
+      it("setCapsEnabled by owner", async function () {
+        await treasury.connect(owner).setCapsEnabled(true);
+        expect(await treasury.capsEnabled()).to.be.true;
+      });
+
+      it("setDailyCap by owner", async function () {
+        const cap = ethers.parseEther("50");
+        await treasury.connect(owner).setDailyCap(ethers.ZeroAddress, cap);
+        expect(await treasury.dailyCap(ethers.ZeroAddress)).to.equal(cap);
+      });
+
+      it("daily cap enforcement on TRANSFER_ETH", async function () {
+        await owner.sendTransaction({ to: await treasury.getAddress(), value: ethers.parseEther("100") });
+        await treasury.connect(owner).setCapsEnabled(true);
+        // Set a very small cap so even the first transfer can exhaust it
+        await treasury.connect(owner).setDailyCap(ethers.ZeroAddress, ethers.parseEther("1"));
+
+        // First transfer within cap
+        const data1 = coder.encode(["address","uint256"], [outsider.address, ethers.parseEther("1")]);
+        await treasuryProposalLifecycle(owner, AT.TRANSFER_ETH, data1);
+
+        // Second transfer on same day should exceed cap — but proposals advance time.
+        // So we do this directly: propose, vote, finalize, then execute within same day.
+        // Since treasuryProposalLifecycle advances time by ~8 days, cap days may differ.
+        // Instead just test that a single large transfer exceeds the cap.
+        const data2 = coder.encode(["address","uint256"], [outsider.address, ethers.parseEther("2")]);
+        await expect(
+          treasuryProposalLifecycle(owner, AT.TRANSFER_ETH, data2)
+        ).to.be.revertedWithCustomError(treasury, "CapExceeded");
+      });
+    });
+
+    describe("View functions", function () {
+      it("balanceETH returns treasury ETH balance", async function () {
+        await owner.sendTransaction({ to: await treasury.getAddress(), value: ethers.parseEther("5") });
+        expect(await treasury.balanceETH()).to.equal(ethers.parseEther("5"));
+      });
+
+      it("balanceERC20 returns token balance", async function () {
+        const tokenAddr = await mockToken.getAddress();
+        await mockToken.mint(await treasury.getAddress(), ethers.parseEther("42"));
+        expect(await treasury.balanceERC20(tokenAddr)).to.equal(ethers.parseEther("42"));
+      });
+
+      it("getProposal returns proposal data", async function () {
+        await owner.sendTransaction({ to: await treasury.getAddress(), value: ethers.parseEther("10") });
+        const data = coder.encode(["address","uint256"], [outsider.address, ethers.parseEther("1")]);
+        const proposalId = await treasury.connect(owner).propose.staticCall(AT.TRANSFER_ETH, data);
+        await treasury.connect(owner).propose(AT.TRANSFER_ETH, data);
+        const p = await treasury.getProposal(proposalId);
+        expect(p.actionType).to.equal(AT.TRANSFER_ETH);
+        expect(p.finalized).to.be.false;
+      });
+
+      it("getProposalData returns encoded data", async function () {
+        const data = coder.encode(["address","uint256"], [outsider.address, ethers.parseEther("1")]);
+        const proposalId = await treasury.connect(owner).propose.staticCall(AT.TRANSFER_ETH, data);
+        await treasury.connect(owner).propose(AT.TRANSFER_ETH, data);
+        const storedData = await treasury.getProposalData(proposalId);
+        expect(storedData).to.equal(data);
+      });
+
+      it("getProposal reverts for non-existent proposal", async function () {
+        await expect(treasury.getProposal(999)).to.be.revertedWithCustomError(treasury, "ProposalNotFound");
+      });
+
+      it("getProposalData reverts for non-existent proposal", async function () {
+        await expect(treasury.getProposalData(999)).to.be.revertedWithCustomError(treasury, "ProposalNotFound");
+      });
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  //  GuildController — Forwarding coverage
+  // ══════════════════════════════════════════════════════════
+  describe("GuildController (forwarding)", function () {
+    let memberId2;
+
+    beforeEach(async function () {
+      memberId2 = await inviteAndAccept(owner, member1);
+    });
+
+    it("setRank forwarded from OrderController", async function () {
+      // Issue promotion grant via order
+      await orders.connect(owner).issuePromotionGrant(memberId2, Rank.F);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await ethers.provider.send("evm_increaseTime", [86401]);
+      await ethers.provider.send("evm_mine");
+      await orders.connect(member1).acceptPromotionGrant(orderId);
+
+      const m = await dao.getMember(memberId2);
+      expect(m.rank).to.equal(Rank.F);
+    });
+
+    it("setRank forwarded from ProposalController (GrantRank)", async function () {
+      // Create GrantRank governance proposal
+      await proposals.connect(owner).createProposalGrantRank(memberId2, Rank.E);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await mineBlocks(2);
+      await proposals.connect(owner).castVote(propId, true);
+      await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+      await ethers.provider.send("evm_mine");
+      await proposals.connect(owner).finalizeProposal(propId);
+
+      const m = await dao.getMember(memberId2);
+      expect(m.rank).to.equal(Rank.E);
+    });
+
+    it("setAuthority forwarded from OrderController", async function () {
+      await orders.connect(owner).issueAuthorityOrder(memberId2, extra1.address);
+      const orderId = (await orders.nextOrderId()) - 1n;
+      await ethers.provider.send("evm_increaseTime", [86401]);
+      await ethers.provider.send("evm_mine");
+      await orders.connect(owner).executeOrder(orderId);
+
+      const m = await dao.getMember(memberId2);
+      expect(m.authority).to.equal(extra1.address);
+    });
+
+    it("setVotingPeriod forwarded from ProposalController", async function () {
+      await proposals.connect(owner).createProposalChangeParameter(PType.ChangeVotingPeriod, 86400);
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await mineBlocks(2);
+      await proposals.connect(owner).castVote(propId, true);
+      await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+      await ethers.provider.send("evm_mine");
+      await proposals.connect(owner).finalizeProposal(propId);
+
+      expect(await dao.votingPeriod()).to.equal(86400);
+    });
+
+    it("transferERC20 forwarded from ProposalController", async function () {
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const token = await MockERC20.deploy("Tok", "TK");
+      await token.waitForDeployment();
+      await token.mint(await dao.getAddress(), ethers.parseEther("100"));
+
+      await proposals.connect(owner).createProposalTransferERC20(
+        await token.getAddress(), ethers.parseEther("10"), outsider.address
+      );
+      const propId = (await proposals.nextProposalId()) - 1n;
+      await mineBlocks(2);
+      await proposals.connect(owner).castVote(propId, true);
+      await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+      await ethers.provider.send("evm_mine");
+      await proposals.connect(owner).finalizeProposal(propId);
+
+      expect(await token.balanceOf(outsider.address)).to.equal(ethers.parseEther("10"));
+    });
+
+    it("addMember forwarded from InviteController", async function () {
+      const memberId3 = await inviteAndAccept(owner, member2);
+      expect(memberId3).to.be.gt(0);
+      const m = await dao.getMember(memberId3);
+      expect(m.rank).to.equal(Rank.G);
+      expect(m.authority).to.equal(member2.address);
+    });
+
+    it("outsider cannot call onlySubController functions", async function () {
+      await expect(
+        guild.connect(outsider).setRank(1, Rank.F, 1, false)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+    });
+
+    it("outsider cannot call onlyProposalController functions", async function () {
+      await expect(
+        guild.connect(outsider).setVotingPeriod(100)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+    });
+
+    it("outsider cannot call onlyInviteController functions", async function () {
+      await expect(
+        guild.connect(outsider).addMember(outsider.address)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+    });
+
+    it("cannot set sub-controllers to zero address", async function () {
+      // Try via owner during bootstrap scenario — but owner has renounced so use proposalController
+      // Actually owner hasn't finalized yet so owner can still set
+      // Re-deploy fresh DAO for this test isn't needed - the revert happens regardless
+      await expect(
+        guild.connect(owner).setOrderController(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(guild, "InvalidAddress");
+      await expect(
+        guild.connect(owner).setProposalController(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(guild, "InvalidAddress");
+      await expect(
+        guild.connect(owner).setInviteController(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(guild, "InvalidAddress");
+    });
+
+    it("outsider cannot set sub-controllers", async function () {
+      await expect(
+        guild.connect(outsider).setOrderController(extra1.address)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+      await expect(
+        guild.connect(outsider).setProposalController(extra1.address)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+      await expect(
+        guild.connect(outsider).setInviteController(extra1.address)
+      ).to.be.revertedWithCustomError(guild, "NotAuthorized");
+    });
+  });
 });
