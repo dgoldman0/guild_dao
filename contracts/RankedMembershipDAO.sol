@@ -1,24 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    RankedMembershipDAO — Core membership registry.
-
-    Holds:
-      - Member data (id, rank, authority, joinedAt)
-      - Voting power snapshots (per-member + total, using OZ Checkpoints)
-      - Rank math helpers (votingPowerOfRank, inviteAllowanceOfRank, proposalLimitOfRank)
-      - Configurable governance parameters (votingPeriod, quorumBps, etc.)
-      - Bootstrap controls for initial member seeding
-      - Controller authorization: a single GuildController that mediates access
-        from the OrderController (timelocked rank/authority orders),
-        ProposalController (democratic governance proposals), and
-        InviteController (invite-based member additions).
-
-    The GuildController is set via `setController()` (owner or controller).
-    MembershipTreasury reads this contract through the IRankedMembershipDAO
-    interface.
-*/
+/// @title RankedMembershipDAO — Core membership registry for the Guild DAO.
+/// @author Guild DAO
+/// @notice Holds member data (id, rank, authority, joinedAt), voting-power
+///         snapshots (OZ Checkpoints), rank-math helpers, configurable
+///         governance parameters, bootstrap seeding, and fee configuration.
+/// @dev    A single GuildController is the sole `controller` that mediates
+///         writes from OrderController, ProposalController, and InviteController.
+///         MembershipTreasury and FeeRouter read this contract through the
+///         IRankedMembershipDAO interface.  ETH, NFTs (via safeTransferFrom),
+///         and fallback calls are all rejected.
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -81,23 +73,37 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         return uint8(r);
     }
 
+    /// @notice Voting power of a given rank: `2^rankIndex`.
+    /// @param r The rank to query.
+    /// @return The voting weight (1 for G, 2 for F, … 512 for SSS).
     function votingPowerOfRank(Rank r) public pure returns (uint224) {
         return uint224(1 << _rankIndex(r));
     }
 
+    /// @notice Invite allowance per epoch for a given rank.
+    /// @dev G = 0 (cannot invite); F+ = `2^(rankIndex - 1)`.
+    /// @param r The rank to query.
+    /// @return Number of invites the rank may issue per 100-day epoch.
     function inviteAllowanceOfRank(Rank r) public pure returns (uint16) {
         if (r < Rank.F) return 0;
         return uint16(1 << (_rankIndex(r) - _rankIndex(Rank.F)));
     }
 
-    function proposalLimitOfRank(Rank r) public pure returns (uint8) {
+    /// @notice Maximum concurrent governance proposals for a given rank.
+    /// @param r The rank to query.
+    /// @return limit G = 0; F = 1; E = 2; … SSS = 9.
+    function proposalLimitOfRank(Rank r) public pure returns (uint8 limit) {
         if (r < Rank.F) return 0;
         return uint8(1 + (_rankIndex(r) - _rankIndex(Rank.F)));
     }
 
-    function orderLimitOfRank(Rank r) public pure returns (uint8) {
-        if (r < Rank.E) return 0;           // G, F cannot issue orders
-        return uint8(1 << (_rankIndex(r) - _rankIndex(Rank.E)));  // E=1, D=2, C=4, B=8, …
+    /// @notice Maximum concurrent timelocked orders for a given rank.
+    /// @dev G, F = 0 (cannot issue orders); E = 1, D = 2, C = 4, … doubling.
+    /// @param r The rank to query.
+    /// @return limit Concurrent order cap.
+    function orderLimitOfRank(Rank r) public pure returns (uint8 limit) {
+        if (r < Rank.E) return 0;
+        return uint8(1 << (_rankIndex(r) - _rankIndex(Rank.E)));
     }
 
     // ================================================================
@@ -224,13 +230,21 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     //                  OWNER-ONLY ADMIN
     // ================================================================
 
+    /// @notice Pause the contract (blocks `changeMyAuthority`). Owner only.
     function pause() external onlyOwner { _pause(); }
+    /// @notice Unpause the contract. Owner only.
     function unpause() external onlyOwner { _unpause(); }
 
+    /// @notice Add a member during bootstrap (before `finalizeBootstrap`).
+    /// @dev Bootstrap members are fee-exempt forever (`feePaidUntil = max`).
+    /// @param authority The wallet address of the new member.
+    /// @param rank The initial rank to assign.
     function bootstrapAddMember(address authority, Rank rank) external onlyOwner {
         _bootstrapMember(authority, rank);
     }
 
+    /// @notice Finalize bootstrap: prevents further bootstrap members and
+    ///         renounces ownership.  The DAO becomes fully decentralized.
     function finalizeBootstrap() external onlyOwner {
         bootstrapFinalized = true;
         emit BootstrapFinalized();
@@ -261,6 +275,10 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     // ================================================================
 
     /// @notice Set a member's rank. Only callable by the controller (GuildController).
+    /// @param memberId The target member's ID.
+    /// @param newRank The new rank to assign.
+    /// @param byMemberId The member who initiated the change.
+    /// @param viaGovernance True if the change came from a democratic proposal.
     function setRank(uint32 memberId, Rank newRank, uint32 byMemberId, bool viaGovernance)
         external
         onlyController
@@ -269,6 +287,10 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     /// @notice Set a member's authority address. Only callable by the controller (GuildController).
+    /// @param memberId The target member's ID.
+    /// @param newAuthority The new wallet address.
+    /// @param byMemberId The member who initiated the change.
+    /// @param viaGovernance True if the change came from a democratic proposal.
     function setAuthority(uint32 memberId, address newAuthority, uint32 byMemberId, bool viaGovernance)
         external
         onlyController
@@ -278,6 +300,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     /// @notice Register a new member at rank G.
     ///         Callable by the controller (GuildController, on behalf of InviteController).
+    /// @param authority The wallet address for the new member.
     /// @return newMemberId The ID of the newly created member.
     function addMember(address authority) external onlyController returns (uint32 newMemberId) {
         if (authority == address(0)) revert InvalidAddress();
@@ -303,6 +326,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     // --- Governance parameter setters (controller-only) ---
 
+    /// @notice Set the governance voting period.
+    /// @param newValue New duration in seconds (bounds: MIN/MAX_VOTING_PERIOD).
     function setVotingPeriod(uint64 newValue) external onlyController {
         if (newValue < MIN_VOTING_PERIOD || newValue > MAX_VOTING_PERIOD) revert ParameterOutOfBounds();
         uint64 old = votingPeriod;
@@ -310,6 +335,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit VotingPeriodChanged(old, newValue);
     }
 
+    /// @notice Set the governance quorum in basis points.
+    /// @param newValue New quorum (500 = 5 %, 5000 = 50 %).
     function setQuorumBps(uint16 newValue) external onlyController {
         if (newValue < MIN_QUORUM_BPS || newValue > MAX_QUORUM_BPS) revert ParameterOutOfBounds();
         uint16 old = quorumBps;
@@ -317,6 +344,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit QuorumBpsChanged(old, newValue);
     }
 
+    /// @notice Set the timelocked order delay.
+    /// @param newValue New delay in seconds.
     function setOrderDelay(uint64 newValue) external onlyController {
         if (newValue < MIN_ORDER_DELAY || newValue > MAX_ORDER_DELAY) revert ParameterOutOfBounds();
         uint64 old = orderDelay;
@@ -324,6 +353,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit OrderDelayChanged(old, newValue);
     }
 
+    /// @notice Set the invite expiry duration.
+    /// @param newValue New duration in seconds.
     function setInviteExpiry(uint64 newValue) external onlyController {
         if (newValue < MIN_INVITE_EXPIRY || newValue > MAX_INVITE_EXPIRY) revert ParameterOutOfBounds();
         uint64 old = inviteExpiry;
@@ -331,6 +362,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
         emit InviteExpiryChanged(old, newValue);
     }
 
+    /// @notice Set the treasury execution delay.
+    /// @param newValue New delay in seconds.
     function setExecutionDelay(uint64 newValue) external onlyController {
         if (newValue < MIN_EXECUTION_DELAY || newValue > MAX_EXECUTION_DELAY) revert ParameterOutOfBounds();
         uint64 old = executionDelay;
@@ -340,6 +373,9 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     /// @notice Transfer ERC20 tokens held by this contract (e.g. accidental deposits).
     ///         Only callable by the controller (via governance vote).
+    /// @param token The ERC-20 token address.
+    /// @param recipient The destination address.
+    /// @param amount The number of tokens to transfer.
     function transferERC20(address token, address recipient, uint256 amount) external onlyController {
         if (token == address(0) || recipient == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(recipient, amount);
@@ -383,6 +419,8 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     }
 
     /// @notice Governance override to set member active status.
+    /// @param memberId The target member.
+    /// @param active True to reactivate, false to deactivate.
     function setMemberActive(uint32 memberId, bool active) external onlyController {
         Member storage m = membersById[memberId];
         if (!m.exists) revert InvalidTarget();
@@ -404,6 +442,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     /// @notice Governance can convert a bootstrap member to fee-paying status.
     ///         Resets feePaidUntil from type(uint64).max to now + EPOCH.
+    /// @param memberId The bootstrap member to convert.
     function resetBootstrapFee(uint32 memberId) external onlyController {
         Member storage m = membersById[memberId];
         if (!m.exists) revert InvalidTarget();
@@ -418,6 +457,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
 
     /// @notice Record a fee payment.  Extends feePaidUntil and reactivates if needed.
     ///         Only callable by the fee router contract (after it has collected the fee).
+    /// @param memberId The member whose fee was paid.
     function recordFeePayment(uint32 memberId) external onlyFeeRouter {
         Member storage m = membersById[memberId];
         if (!m.exists) revert InvalidTarget();
@@ -446,6 +486,7 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     // ================================================================
 
     /// @notice Deactivate a member whose fee has expired (+ grace).  Anyone can call.
+    /// @param memberId The ID of the expired member.
     function deactivateMember(uint32 memberId) external {
         Member storage m = membersById[memberId];
         if (!m.exists) revert InvalidTarget();
@@ -475,26 +516,37 @@ contract RankedMembershipDAO is Ownable, Pausable, ReentrancyGuard, IERC721Recei
     //                      VIEW FUNCTIONS
     // ================================================================
 
+    /// @notice Current total voting power across all active members.
     function totalVotingPower() public view returns (uint224) {
         return _totalPower.latest();
     }
 
+    /// @notice Total voting power as of a historical block.
+    /// @param blockNumber The block to query.
     function totalVotingPowerAt(uint32 blockNumber) public view returns (uint224) {
         return _totalPower.upperLookupRecent(blockNumber);
     }
 
+    /// @notice Current voting power of a member.
+    /// @param memberId The member to query.
     function votingPowerOfMember(uint32 memberId) public view returns (uint224) {
         return _memberPower[memberId].latest();
     }
 
+    /// @notice Voting power of a member at a historical block (for snapshot voting).
+    /// @param memberId The member to query.
+    /// @param blockNumber The snapshot block.
     function votingPowerOfMemberAt(uint32 memberId, uint32 blockNumber) public view returns (uint224) {
         return _memberPower[memberId].upperLookupRecent(blockNumber);
     }
 
+    /// @notice Get the member ID of the caller.
     function myMemberId() external view returns (uint32) {
         return memberIdByAuthority[msg.sender];
     }
 
+    /// @notice Retrieve full member struct by ID.
+    /// @param memberId The member to look up.
     function getMember(uint32 memberId) external view returns (Member memory) {
         return membersById[memberId];
     }

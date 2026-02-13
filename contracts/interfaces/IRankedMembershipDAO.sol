@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @notice Interface for RankedMembershipDAO
+/// @title IRankedMembershipDAO — Interface for external contracts to read DAO state.
+/// @notice Used by MembershipTreasury, TreasurerModule, and FeeRouter.
 interface IRankedMembershipDAO {
     enum Rank { G, F, E, D, C, B, A, S, SS, SSS }
 

@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    TreasurerModule — Manages treasurer roles and direct fund spending.
-
-    Two treasurer types:
-      • MemberBased  – linked to a DAO member, spending scales with rank power.
-      • AddressBased – linked to an EOA / contract, fixed spending limit.
-
-    NFT transfer access can also be granted per-collection.
-
-    State mutations come from:
-      1.  Direct treasurer calls  (treasurerSpendETH, etc.)
-      2.  Proposal execution forwarded by MembershipTreasury
-          via `executeTreasurerAction()`.
-*/
+/// @title TreasurerModule — Manages treasurer roles and direct fund spending.
+/// @author Guild DAO
+/// @notice Supports two treasurer types: member-based (spending scales with rank
+///         power) and address-based (fixed spending limits).  Also manages
+///         per-collection NFT transfer access.  State mutations come from direct
+///         treasurer calls or proposal execution forwarded by MembershipTreasury.
+/// @dev    Implements ITreasurerModule for the `executeTreasurerAction` entry-point.
+///         All fund movements go through MembershipTreasury's `moduleTransfer*`
+///         / `moduleCall` entry-points.
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
@@ -170,6 +165,7 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
     }
 
     /// @notice Link this module to the Treasury.  Deployer-only, one-shot.
+    /// @param treasuryAddress The MembershipTreasury contract address.
     function setTreasury(address treasuryAddress) external {
         if (msg.sender != _deployer) revert NotDeployer();
         if (address(treasury) != address(0)) revert TreasuryAlreadySet();
@@ -180,6 +176,9 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
 
     // ═══════════════════════════════ Direct Spending ══════════════════════════
 
+    /// @notice Spend ETH from the treasury as a designated treasurer.
+    /// @param to Recipient address.
+    /// @param amount Wei to transfer.
     function treasurerSpendETH(address to, uint256 amount) external nonReentrant {
         if (treasury.treasuryLocked()) revert TreasuryLocked();
         if (to == address(0)) revert InvalidAddress();
@@ -195,6 +194,10 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
         emit TreasurerSpent(msg.sender, tType, to, address(0), amount);
     }
 
+    /// @notice Spend ERC-20 tokens from the treasury as a designated treasurer.
+    /// @param token ERC-20 address.
+    /// @param to Recipient address.
+    /// @param amount Token amount.
     function treasurerSpendERC20(address token, address to, uint256 amount) external nonReentrant {
         if (treasury.treasuryLocked()) revert TreasuryLocked();
         if (token == address(0) || to == address(0)) revert InvalidAddress();
@@ -210,6 +213,10 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
         emit TreasurerSpent(msg.sender, tType, to, token, amount);
     }
 
+    /// @notice Transfer an NFT from the treasury as a designated treasurer.
+    /// @param nftContract ERC-721 address.
+    /// @param to Recipient address.
+    /// @param tokenId Token ID to transfer.
     function treasurerTransferNFT(
         address nftContract, address to, uint256 tokenId
     ) external nonReentrant {
@@ -226,6 +233,11 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
         emit TreasurerNFTTransferred(msg.sender, tType, nftContract, to, tokenId);
     }
 
+    /// @notice Execute an arbitrary call from the treasury as a designated treasurer.
+    /// @dev Requires `treasurerCallsEnabled` and target in `approvedCallTargets`.
+    /// @param target Call target.
+    /// @param value ETH value to forward.
+    /// @param data Calldata payload.
     function treasurerCall(
         address target, uint256 value, bytes calldata data
     ) external nonReentrant {
@@ -249,6 +261,10 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
     // ═══════════════════════════════ Proposal Execution ═══════════════════════
     //  Called by MembershipTreasury.execute() for treasurer/NFT action types.
 
+    /// @notice Execute a treasurer/NFT action forwarded by MembershipTreasury.
+    /// @dev Only callable by the treasury.  Routes to internal handlers by action type.
+    /// @param at ActionType constant (3–15 range).
+    /// @param data ABI-encoded payload.
     function executeTreasurerAction(uint8 at, bytes calldata data) external onlyTreasury {
         if      (at == ActionTypes.ADD_MEMBER_TREASURER)     _execAddMemberTreasurer(data);
         else if (at == ActionTypes.UPDATE_MEMBER_TREASURER)  _execUpdateMemberTreasurer(data);
@@ -570,23 +586,31 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
 
     // ═══════════════════════════════ Views ════════════════════════════════════
 
+    /// @notice Get full config for a member-based treasurer.
+    /// @param memberId The DAO member ID.
     function getMemberTreasurerConfig(uint32 memberId)
         external view returns (TreasurerConfig memory)
     {
         return memberTreasurers[memberId];
     }
 
+    /// @notice Get full config for an address-based treasurer.
+    /// @param treasurer The treasurer address.
     function getAddressTreasurerConfig(address treasurer)
         external view returns (TreasurerConfig memory)
     {
         return addressTreasurers[treasurer];
     }
 
+    /// @notice Check whether `spender` is an active treasurer.
+    /// @param spender Address to check.
     function isTreasurer(address spender) external view returns (bool, TreasurerType) {
         (TreasurerType tType,,) = _getTreasurerInfo(spender, address(0));
         return (tType != TreasurerType.None, tType);
     }
 
+    /// @notice Get the remaining ETH spending limit for a treasurer in the current period.
+    /// @param spender Treasurer address.
     function getTreasurerRemainingLimit(address spender) external view returns (uint256) {
         (TreasurerType tType, uint256 limit, uint32 memberId) =
             _getTreasurerInfo(spender, address(0));
@@ -604,18 +628,29 @@ contract TreasurerModule is ReentrancyGuard, ITreasurerModule {
         }
     }
 
+    /// @notice Get NFT access config for a member-based treasurer.
+    /// @param memberId The DAO member ID.
+    /// @param nftContract The ERC-721 contract.
     function getMemberNFTAccess(uint32 memberId, address nftContract)
         external view returns (NFTAccessConfig memory)
     {
         return memberNFTAccess[memberId][nftContract];
     }
 
+    /// @notice Get NFT access config for an address-based treasurer.
+    /// @param treasurer The treasurer address.
+    /// @param nftContract The ERC-721 contract.
     function getAddressNFTAccess(address treasurer, address nftContract)
         external view returns (NFTAccessConfig memory)
     {
         return addressNFTAccess[treasurer][nftContract];
     }
 
+    /// @notice Check whether `spender` has NFT transfer access for a collection.
+    /// @param spender Address to check.
+    /// @param nftContract The ERC-721 contract.
+    /// @return canTransfer True if access is granted.
+    /// @return tType The treasurer type.
     function hasNFTAccessView(address spender, address nftContract)
         external view returns (bool canTransfer, TreasurerType tType)
     {

@@ -2,6 +2,10 @@
 pragma solidity ^0.8.24;
 
 /// @title ActionTypes — Shared action-type constants for Treasury proposals.
+/// @author Guild DAO
+/// @notice Defines numeric constants for each treasury proposal action type.
+///         Actions 0–2 and 16–20 are executed by MembershipTreasury directly;
+///         actions 3–15 are forwarded to TreasurerModule.
 library ActionTypes {
     // ── Basic (executed by MembershipTreasury) ──
     uint8 constant TRANSFER_ETH             = 0;

@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    InviteController — Membership invite system for the RankedMembershipDAO.
-
-    Extracted from the governance layer to keep each contract under the
-    EIP-170 bytecode size limit (24 576 bytes).
-
-    Manages:
-      - Invite issuance (per-epoch allowance by rank)
-      - Invite acceptance (creates new G-rank member via GuildController → DAO)
-      - Invite reclaim (return allowance after expiry)
-
-    Registered as the `inviteController` on the GuildController, which
-    forwards the addMember() call to the DAO.
-*/
+/// @title InviteController — Membership invite system for the Guild DAO.
+/// @author Guild DAO
+/// @notice Manages invite issuance (per-epoch allowance by rank), acceptance
+///         (creates a new G-rank member), and reclaim (returns allowance after
+///         expiry).  Registered as `inviteController` on GuildController.
+/// @dev    Member creation flows through GuildController.addMember() → DAO.
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
@@ -110,6 +102,9 @@ contract InviteController is ReentrancyGuard {
     //                     INVITE FUNCTIONS
     // ================================================================
 
+    /// @notice Issue an invite to `to`.  Caller must be F+ with remaining epoch allowance.
+    /// @param to The wallet address of the person being invited.
+    /// @return inviteId The newly created invite ID.
     function issueInvite(address to) external nonReentrant returns (uint64 inviteId) {
         if (to == address(0)) revert InvalidAddress();
 
@@ -144,6 +139,10 @@ contract InviteController is ReentrancyGuard {
         emit InviteIssued(inviteId, issuerId, to, expiresAt, epoch);
     }
 
+    /// @notice Accept a pending invite.  Creates a new G-rank member.
+    /// @dev Must be called by the `to` address before the invite expires.
+    /// @param inviteId The invite to accept.
+    /// @return newMemberId The ID of the newly created member.
     function acceptInvite(uint64 inviteId) external nonReentrant returns (uint32 newMemberId) {
         Invite storage inv = invitesById[inviteId];
         if (!inv.exists) revert InviteNotFound();
@@ -161,6 +160,9 @@ contract InviteController is ReentrancyGuard {
         emit InviteClaimed(inviteId, newMemberId, msg.sender);
     }
 
+    /// @notice Reclaim an expired, unclaimed invite to recover the issuer's allowance.
+    /// @dev Only the original issuer can reclaim.
+    /// @param inviteId The expired invite to reclaim.
     function reclaimExpiredInvite(uint64 inviteId) external nonReentrant {
         Invite storage inv = invitesById[inviteId];
         if (!inv.exists) revert InviteNotFound();
@@ -185,6 +187,8 @@ contract InviteController is ReentrancyGuard {
     //                      VIEW FUNCTIONS
     // ================================================================
 
+    /// @notice Retrieve a full invite struct.
+    /// @param inviteId The invite to look up.
     function getInvite(uint64 inviteId) external view returns (Invite memory) {
         return invitesById[inviteId];
     }

@@ -1,21 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    ProposalController — Democratic governance proposal system for the
-    RankedMembershipDAO.
-
-    Manages:
-      - Proposal creation (rank, authority, parameter, ERC20 transfer, bootstrap fee reset)
-      - Snapshot-based weighted voting
-      - Quorum + majority finalization
-      - Execution of passed proposals (calls DAO setters or OrderController bridge)
-      - BlockOrder proposals (delegates to OrderController.blockOrderByGovernance)
-
-    This contract calls DAO mutators through the GuildController (the DAO's
-    sole controller).  It also calls OrderController.blockOrderByGovernance()
-    directly for BlockOrder proposals.
-*/
+/// @title ProposalController — Democratic governance proposal system.
+/// @author Guild DAO
+/// @notice Manages snapshot-based weighted voting for rank changes, parameter
+///         updates, ERC-20 recovery, order blocking, and bootstrap-fee resets.
+/// @dev    Proposals are created by F+ members, voted on by all members, and
+///         finalized + executed in a single `finalizeProposal` call.  All DAO
+///         mutations flow through GuildController.  BlockOrder proposals call
+///         OrderController.blockOrderByGovernance() directly.
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -178,6 +171,10 @@ contract ProposalController is ReentrancyGuard {
     //               PROPOSAL CREATION
     // ================================================================
 
+    /// @notice Propose promoting a member to a higher rank via governance vote.
+    /// @param targetId The member to promote.
+    /// @param newRank The new rank (must be > current rank).
+    /// @return proposalId The new proposal ID.
     function createProposalGrantRank(uint32 targetId, RankedMembershipDAO.Rank newRank)
         external
         nonReentrant
@@ -196,6 +193,10 @@ contract ProposalController is ReentrancyGuard {
         proposalId = _createProposal(ProposalType.GrantRank, proposerId, targetId, newRank, address(0), 0, 0, address(0), 0, address(0));
     }
 
+    /// @notice Propose demoting a member to a lower rank via governance vote.
+    /// @param targetId The member to demote.
+    /// @param newRank The new rank (must be < current rank).
+    /// @return proposalId The new proposal ID.
     function createProposalDemoteRank(uint32 targetId, RankedMembershipDAO.Rank newRank)
         external
         nonReentrant
@@ -214,6 +215,10 @@ contract ProposalController is ReentrancyGuard {
         proposalId = _createProposal(ProposalType.DemoteRank, proposerId, targetId, newRank, address(0), 0, 0, address(0), 0, address(0));
     }
 
+    /// @notice Propose changing a member's authority (wallet) address.
+    /// @param targetId The member whose wallet to change.
+    /// @param newAuthority The proposed new wallet.
+    /// @return proposalId The new proposal ID.
     function createProposalChangeAuthority(uint32 targetId, address newAuthority)
         external
         nonReentrant
@@ -233,6 +238,12 @@ contract ProposalController is ReentrancyGuard {
 
     // --- Parameter change proposals (unified) ---
 
+    /// @notice Propose changing a governance parameter.
+    /// @dev Validates `newValue` against DAO min/max bounds.
+    /// @param pType Must be one of ChangeVotingPeriod/ChangeQuorumBps/ChangeOrderDelay/
+    ///        ChangeInviteExpiry/ChangeExecutionDelay.
+    /// @param newValue The proposed parameter value.
+    /// @return proposalId The new proposal ID.
     function createProposalChangeParameter(ProposalType pType, uint64 newValue) external nonReentrant returns (uint64 proposalId) {
         if (pType == ProposalType.ChangeVotingPeriod) {
             if (newValue < dao.MIN_VOTING_PERIOD() || newValue > dao.MAX_VOTING_PERIOD()) revert ParameterOutOfBounds();
@@ -255,6 +266,9 @@ contract ProposalController is ReentrancyGuard {
 
     // --- BlockOrder and TransferERC20 proposals ---
 
+    /// @notice Propose blocking a pending order via governance vote.
+    /// @param orderId The order to block (must exist / not blocked / not executed).
+    /// @return proposalId The new proposal ID.
     function createProposalBlockOrder(uint64 orderId) external nonReentrant returns (uint64 proposalId) {
         (uint32 proposerId, RankedMembershipDAO.Rank proposerRank) = _requireMember(msg.sender);
         if (_rankIndex(proposerRank) < _rankIndex(RankedMembershipDAO.Rank.F)) revert RankTooLow();
@@ -269,6 +283,11 @@ contract ProposalController is ReentrancyGuard {
         proposalId = _createProposal(ProposalType.BlockOrder, proposerId, o.targetId, RankedMembershipDAO.Rank(0), address(0), 0, orderId, address(0), 0, address(0));
     }
 
+    /// @notice Propose transferring ERC-20 tokens held by the DAO contract.
+    /// @param token The ERC-20 token address.
+    /// @param amount The amount to transfer.
+    /// @param recipient The destination address.
+    /// @return proposalId The new proposal ID.
     function createProposalTransferERC20(address token, uint256 amount, address recipient)
         external
         nonReentrant
@@ -301,6 +320,10 @@ contract ProposalController is ReentrancyGuard {
     //              VOTING
     // ================================================================
 
+    /// @notice Cast a vote on an active proposal.
+    /// @dev Weight is determined by snapshot-block voting power.
+    /// @param proposalId The proposal to vote on.
+    /// @param support True for yes, false for no.
     function castVote(uint64 proposalId, bool support) external nonReentrant {
         Proposal storage p = proposalsById[proposalId];
         if (!p.exists) revert ProposalNotFound();
@@ -327,6 +350,9 @@ contract ProposalController is ReentrancyGuard {
     //         FINALIZATION & EXECUTION
     // ================================================================
 
+    /// @notice Finalize a proposal after its voting period ends.
+    /// @dev Checks quorum + majority.  If passed, executes immediately.
+    /// @param proposalId The proposal to finalize.
     function finalizeProposal(uint64 proposalId) external nonReentrant {
         Proposal storage p = proposalsById[proposalId];
         if (!p.exists) revert ProposalNotFound();
@@ -472,6 +498,8 @@ contract ProposalController is ReentrancyGuard {
     //                      VIEW FUNCTIONS
     // ================================================================
 
+    /// @notice Retrieve a full proposal struct.
+    /// @param proposalId The proposal to look up.
     function getProposal(uint64 proposalId) external view returns (Proposal memory) {
         return proposalsById[proposalId];
     }

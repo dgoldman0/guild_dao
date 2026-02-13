@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    MembershipTreasury  —  Holds ETH / ERC-20 / NFTs for the DAO.
-
-    Architecture
-    ────────────
-    • Members create proposals via a single generic `propose(actionType, data)`.
-    • Other members vote, anyone can finalize after the voting period.
-    • Basic execution (transfers, calls, settings) runs locally.
-    • Treasurer / NFT management actions are forwarded to the TreasurerModule.
-    • The TreasurerModule calls back via `moduleTransfer*` / `moduleCall` to move
-      funds.  Those entry-points are restricted by `onlyModule`.
-*/
+/// @title MembershipTreasury — Multi-asset fund store for the Guild DAO.
+/// @author Guild DAO
+/// @notice Holds ETH, ERC-20, and NFT assets.  Provides a governance proposal
+///         system (propose → vote → finalize → execute) with an execution delay.
+///         Basic transfers and settings execute locally; treasurer and NFT
+///         management actions are forwarded to the TreasurerModule.
+/// @dev    The TreasurerModule calls back via `moduleTransfer*` / `moduleCall`
+///         to move funds.  Those entry-points are restricted by `onlyModule`.
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -144,6 +140,7 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
     }
 
     /// @notice Wire the TreasurerModule.  Owner-only, one-shot.
+    /// @param moduleAddress The TreasurerModule contract address.
     function setTreasurerModule(address moduleAddress) external onlyOwner {
         if (moduleAddress == address(0)) revert InvalidAddress();
         if (treasurerModule != address(0)) revert ModuleAlreadySet();
@@ -157,6 +154,9 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
         emit DepositedETH(msg.sender, msg.value);
     }
 
+    /// @notice Deposit ERC-20 tokens into the treasury.
+    /// @param token The ERC-20 token address.
+    /// @param amount The amount to deposit (must be pre-approved).
     function depositERC20(address token, uint256 amount) external nonReentrant {
         if (token == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
@@ -164,12 +164,16 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
         emit DepositedERC20(token, msg.sender, amount);
     }
 
+    /// @notice Deposit an NFT into the treasury (uses `transferFrom`).
+    /// @param nftContract The ERC-721 contract address.
+    /// @param tokenId The token ID to deposit.
     function depositNFT(address nftContract, uint256 tokenId) external nonReentrant {
         if (nftContract == address(0)) revert InvalidAddress();
         IERC721(nftContract).transferFrom(msg.sender, address(this), tokenId);
         emit DepositedNFT(nftContract, msg.sender, tokenId);
     }
 
+    /// @notice ERC-721 receiver callback — accepts NFT safe transfers.
     function onERC721Received(address, address from, uint256 tokenId, bytes calldata)
         external returns (bytes4)
     {
@@ -179,11 +183,16 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
 
     // ═══════════════════════════════ Admin ════════════════════════════════════
 
+    /// @notice Enable or disable daily spending caps.
+    /// @param enabled True to enforce caps.
     function setCapsEnabled(bool enabled) external onlyOwner {
         capsEnabled = enabled;
         emit CapsEnabled(enabled);
     }
 
+    /// @notice Set the daily spending cap for an asset.
+    /// @param asset Token address (address(0) for ETH).
+    /// @param cap Maximum daily amount (0 = unlimited).
     function setDailyCap(address asset, uint256 cap) external onlyOwner {
         dailyCap[asset] = cap;
         emit DailyCapSet(asset, cap);
@@ -194,19 +203,35 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
     //  these may be called within an already-guarded execute() or the module's
     //  own nonReentrant spending functions.
 
+    /// @notice Transfer ETH.  Called by TreasurerModule.
+    /// @param to Recipient.
+    /// @param amount Wei to send.
     function moduleTransferETH(address to, uint256 amount) external onlyModule {
         (bool ok,) = to.call{value: amount}("");
         if (!ok) revert ExecutionFailed();
     }
 
+    /// @notice Transfer ERC-20 tokens.  Called by TreasurerModule.
+    /// @param token ERC-20 address.
+    /// @param to Recipient.
+    /// @param amount Token amount.
     function moduleTransferERC20(address token, address to, uint256 amount) external onlyModule {
         IERC20(token).safeTransfer(to, amount);
     }
 
+    /// @notice Transfer an NFT.  Called by TreasurerModule.
+    /// @param nftContract ERC-721 address.
+    /// @param to Recipient.
+    /// @param tokenId Token ID.
     function moduleTransferNFT(address nftContract, address to, uint256 tokenId) external onlyModule {
         IERC721(nftContract).safeTransferFrom(address(this), to, tokenId);
     }
 
+    /// @notice Execute an arbitrary call.  Called by TreasurerModule.
+    /// @param target Call target address.
+    /// @param value ETH value to forward.
+    /// @param data Calldata payload.
+    /// @return result The returned bytes.
     function moduleCall(address target, uint256 value, bytes calldata data)
         external onlyModule returns (bytes memory result)
     {
@@ -245,6 +270,11 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
     //  REMOVE_APPROVED_CALL_TARGET→ abi.encode(address target)
     //  SET_TREASURY_LOCKED        → abi.encode(bool locked)
 
+    /// @notice Create a governance proposal.
+    /// @dev See ActionTypes library for encoding per action type.
+    /// @param actionType The action type constant from ActionTypes.
+    /// @param data ABI-encoded payload (format depends on actionType).
+    /// @return proposalId The new proposal ID.
     function propose(uint8 actionType, bytes calldata data)
         external nonReentrant returns (uint64 proposalId)
     {
@@ -276,6 +306,9 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
 
     // ═══════════════════════════════ Vote ═════════════════════════════════════
 
+    /// @notice Cast a vote on an active proposal.
+    /// @param proposalId The proposal to vote on.
+    /// @param support True for yes, false for no.
     function castVote(uint64 proposalId, bool support) external nonReentrant {
         Proposal storage p = _proposals[proposalId];
         if (!p.exists)   revert ProposalNotFound();
@@ -297,6 +330,8 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
 
     // ═══════════════════════════════ Finalize ═════════════════════════════════
 
+    /// @notice Finalize a proposal after voting ends.  Sets execution delay if passed.
+    /// @param proposalId The proposal to finalize.
     function finalize(uint64 proposalId) external nonReentrant {
         Proposal storage p = _proposals[proposalId];
         if (!p.exists)   revert ProposalNotFound();
@@ -328,6 +363,8 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
 
     // ═══════════════════════════════ Execute ══════════════════════════════════
 
+    /// @notice Execute a finalized, successful proposal after its execution delay.
+    /// @param proposalId The proposal to execute.
     function execute(uint64 proposalId) external nonReentrant {
         Proposal storage p = _proposals[proposalId];
         if (!p.exists)                      revert ProposalNotFound();
@@ -427,6 +464,8 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
 
     // ═══════════════════════════════ Views ════════════════════════════════════
 
+    /// @notice Get proposal metadata (excluding raw data bytes).
+    /// @param proposalId The proposal to query.
     function getProposal(uint64 proposalId) external view returns (
         uint64 id, uint32 proposerId, uint8 proposerRank,
         uint32 snapshotBlock, uint64 startTime, uint64 endTime,
@@ -445,19 +484,27 @@ contract MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver {
         );
     }
 
+    /// @notice Get the ABI-encoded data for a proposal.
+    /// @param proposalId The proposal to query.
     function getProposalData(uint64 proposalId) external view returns (bytes memory) {
         if (!_proposals[proposalId].exists) revert ProposalNotFound();
         return _proposals[proposalId].data;
     }
 
+    /// @notice ETH balance of the treasury.
     function balanceETH() external view returns (uint256) {
         return address(this).balance;
     }
 
+    /// @notice ERC-20 balance of the treasury for a given token.
+    /// @param token The ERC-20 token address.
     function balanceERC20(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
     }
 
+    /// @notice Check if the treasury owns a specific NFT.
+    /// @param nftContract The ERC-721 contract address.
+    /// @param tokenId The token ID to check.
     function ownsNFT(address nftContract, uint256 tokenId) external view returns (bool) {
         try IERC721(nftContract).ownerOf(tokenId) returns (address nftOwner) {
             return nftOwner == address(this);

@@ -65,7 +65,7 @@ npm run coverage
 - Statement coverage
 - HTML report in `coverage/index.html`
 
-**Goal:** Aim for >95% coverage on critical contracts (DAO, controllers, treasury).
+**Goal:** Aim for >95% coverage on critical contracts (achieved — see [GAS-AND-COVERAGE.md](GAS-AND-COVERAGE.md)).
 
 ---
 
@@ -130,8 +130,8 @@ Before deploying to mainnet or production, ensure:
 
 - [ ] All Slither HIGH and MEDIUM issues resolved or documented as false positives
 - [ ] Solhint passes with no errors
-- [ ] Test coverage >95% on core contracts
-- [ ] Gas costs reviewed and optimized where possible
+- [ ] Test coverage >95% on core contracts (currently achieved)
+- [ ] Gas costs reviewed and optimized where possible (see [GAS-AND-COVERAGE.md](GAS-AND-COVERAGE.md))
 - [ ] Manual code review completed
 - [ ] External audit completed (for high-value contracts)
 - [ ] Access controls tested (only authorized addresses can call restricted functions)
@@ -199,4 +199,4 @@ jobs:
 
 ---
 
-**Last Updated:** February 11, 2026
+**Last Updated:** February 12, 2026

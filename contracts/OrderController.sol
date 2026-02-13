@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    OrderController — Timelocked hierarchical order system for the
-    RankedMembershipDAO.
-
-    Manages:
-      - Promotion grants (target must accept after delay)
-      - Demotion orders  (auto-execute after delay)
-      - Authority orders  (auto-execute after delay)
-      - Veto / block by higher-ranked members
-      - Rescind by issuer
-      - Block-by-governance (called by ProposalController)
-
-    This contract calls setRank() and setAuthority() through the
-    GuildController (the DAO's sole controller).
-*/
+/// @title OrderController — Timelocked hierarchical order system.
+/// @author Guild DAO
+/// @notice Manages promotion grants, demotion orders, and authority orders with
+///         a configurable delay.  Higher-ranked members or governance can veto.
+/// @dev    All rank/authority mutations flow through GuildController → DAO.
+///         Only one outstanding order per target member at a time.
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {RankedMembershipDAO} from "./RankedMembershipDAO.sol";
@@ -176,6 +167,11 @@ contract OrderController is ReentrancyGuard {
     //               ORDER FUNCTIONS
     // ================================================================
 
+    /// @notice Issue a promotion grant.  The target must accept after the delay.
+    /// @dev Issuer must be ≥ 2 ranks above newRank.  newRank must be > target's current rank.
+    /// @param targetId The member to promote.
+    /// @param newRank The rank to offer.
+    /// @return orderId The newly created order ID.
     function issuePromotionGrant(uint32 targetId, RankedMembershipDAO.Rank newRank)
         external
         nonReentrant
@@ -222,6 +218,10 @@ contract OrderController is ReentrancyGuard {
         emit OrderCreated(orderId, OrderType.PromoteGrant, issuerId, targetId, newRank, address(0), uint64(block.timestamp) + dao.orderDelay());
     }
 
+    /// @notice Issue a demotion order.  Auto-executes after the delay (drops 1 rank).
+    /// @dev Issuer must be ≥ target + 2 ranks.
+    /// @param targetId The member to demote.
+    /// @return orderId The newly created order ID.
     function issueDemotionOrder(uint32 targetId)
         external
         nonReentrant
@@ -262,6 +262,11 @@ contract OrderController is ReentrancyGuard {
         emit OrderCreated(orderId, OrderType.DemoteOrder, issuerId, targetId, RankedMembershipDAO.Rank(0), address(0), uint64(block.timestamp) + dao.orderDelay());
     }
 
+    /// @notice Issue an authority-change order.  Auto-executes after the delay.
+    /// @dev Issuer must be ≥ target + 2 ranks.
+    /// @param targetId The member whose wallet to change.
+    /// @param newAuthority The new wallet address.
+    /// @return orderId The newly created order ID.
     function issueAuthorityOrder(uint32 targetId, address newAuthority)
         external
         nonReentrant
@@ -304,6 +309,8 @@ contract OrderController is ReentrancyGuard {
         emit OrderCreated(orderId, OrderType.AuthorityOrder, issuerId, targetId, RankedMembershipDAO.Rank(0), newAuthority, uint64(block.timestamp) + dao.orderDelay());
     }
 
+    /// @notice Veto a pending order.  Blocker must be ≥ issuerRank + 2.
+    /// @param orderId The order to block.
     function blockOrder(uint64 orderId) external nonReentrant {
         uint32 blockerId = _requireMemberAuthority(msg.sender);
 
@@ -331,6 +338,8 @@ contract OrderController is ReentrancyGuard {
         emit OrderBlocked(orderId, blockerId);
     }
 
+    /// @notice Issuer cancels their own pending order.
+    /// @param orderId The order to rescind.
     function rescindOrder(uint64 orderId) external nonReentrant {
         uint32 callerId = _requireMemberAuthority(msg.sender);
 
@@ -351,6 +360,8 @@ contract OrderController is ReentrancyGuard {
         emit OrderRescinded(orderId, callerId);
     }
 
+    /// @notice Target accepts a promotion grant after the delay has elapsed.
+    /// @param orderId The PromoteGrant order to accept.
     function acceptPromotionGrant(uint64 orderId) external nonReentrant {
         PendingOrder storage o = ordersById[orderId];
         if (!o.exists) revert NoPendingAction();
@@ -377,6 +388,8 @@ contract OrderController is ReentrancyGuard {
         emit OrderExecuted(orderId);
     }
 
+    /// @notice Execute a DemoteOrder or AuthorityOrder after the delay.  Anyone can call.
+    /// @param orderId The order to execute.
     function executeOrder(uint64 orderId) external nonReentrant {
         PendingOrder storage o = ordersById[orderId];
         if (!o.exists) revert NoPendingAction();
@@ -413,6 +426,8 @@ contract OrderController is ReentrancyGuard {
     // ================================================================
 
     /// @notice Block an order via governance vote.  Only callable by the ProposalController.
+    /// @param orderId The order to block.
+    /// @param proposalId The governance proposal ID (for event context).
     function blockOrderByGovernance(uint64 orderId, uint64 proposalId) external {
         if (msg.sender != proposalController) revert NotProposalController();
 
@@ -436,6 +451,8 @@ contract OrderController is ReentrancyGuard {
     //                      VIEW FUNCTIONS
     // ================================================================
 
+    /// @notice Retrieve a full order struct.
+    /// @param orderId The order to look up.
     function getOrder(uint64 orderId) external view returns (PendingOrder memory) {
         return ordersById[orderId];
     }

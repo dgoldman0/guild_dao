@@ -1,6 +1,6 @@
 # Security Audit Results
 
-**Date:** February 11, 2026  
+**Date:** February 11, 2026 (updated February 12, 2026)  
 **Auditor:** Automated Tools (Slither, Solhint)  
 **Contracts Analyzed:** 8 core contracts + dependencies
 
@@ -14,7 +14,7 @@
 - **Low Severity:** 12
 - **Informational:** 83
 
-**Overall Assessment:** No critical vulnerabilities found. Medium-severity issues are primarily false positives or intentional design choices. Code quality is good with comprehensive test coverage (121 tests passing).
+**Overall Assessment:** No critical vulnerabilities found. Medium-severity issues are primarily false positives or intentional design choices. Code quality is good with comprehensive test coverage (190 tests passing, 95% line coverage).
 
 ---
 
@@ -125,32 +125,25 @@ fallback() external payable { revert FundsNotAccepted(); }
 
 ---
 
-### 3-4. **Missing Interface Inheritance**
+### 3-4. **Missing Interface Inheritance** — RESOLVED
 **Findings:**
 - `MembershipTreasury` should inherit from `IERC721Receiver`
 - `TreasurerModule` should inherit from `ITreasurerModule`
 
-**Analysis:**
-- MembershipTreasury implements `onERC721Received` and accepts ERC721 tokens. Inheriting the interface adds explicit type safety.
-- TreasurerModule interface is internal and functions are implemented.
+**Resolution:** Both interfaces now explicitly inherited:
+- `MembershipTreasury is ReentrancyGuard, Ownable, IERC721Receiver`
+- `TreasurerModule is ReentrancyGuard, ITreasurerModule`
 
-**Recommendation:** Add explicit interface inheritance for clarity:
-```solidity
-contract MembershipTreasury is ReentrancyGuard, Pausable, IERC721Receiver { ... }
-```
-
-**Priority:** Low (improves type safety)
+**Status:** ✅ Fixed (commit `e33ead0`)
 
 ---
 
-### 5. **Naming Convention** (11 parameters)
+### 5. **Naming Convention** (11 parameters) — RESOLVED
 **Finding:** Parameters like `_oc`, `_pc`, `_ic`, `_active` use leading underscore (reserved for private/internal).
 
-**Analysis:** Common Solidity pattern to distinguish parameters from state variables. Not harmful but violates style guide.
+**Resolution:** All parameters renamed to mixedCase (e.g., `newOrderController`, `newProposalController`).
 
-**Recommendation:** Rename to mixedCase without underscore (e.g., `newOrderController` instead of `_oc`).
-
-**Priority:** Low (style only)
+**Status:** ✅ Fixed (commit `e33ead0`)
 
 ---
 
@@ -165,17 +158,12 @@ contract MembershipTreasury is ReentrancyGuard, Pausable, IERC721Receiver { ... 
 
 ---
 
-### 7. **TreasurerModule._deployer Not Immutable**
+### 7. **TreasurerModule._deployer Not Immutable** — RESOLVED
 **Finding:** `_deployer` state variable could be `immutable`.
 
-**Analysis:** Set once in constructor, never changes. Making it `immutable` saves gas.
+**Resolution:** Changed to `address private immutable _deployer;`
 
-**Recommendation:** Change to:
-```solidity
-address private immutable _deployer;
-```
-
-**Priority:** Low (gas optimization)
+**Status:** ✅ Fixed (commit `e33ead0`)
 
 ---
 
@@ -194,18 +182,18 @@ address private immutable _deployer;
 
 ### Before Mainnet Deployment:
 
-1. ✅ **Add NatSpec comments** to all public functions (for Etherscan verification)
-2. ✅ **Rename parameters** from `_param` to `param` style guide compliance
-3. ⚠️ **Make TreasurerModule._deployer immutable** (gas savings)
-4. ⚠️ **Add IERC721Receiver inheritance** to MembershipTreasury
-5. ✅ **External audit** by Trail of Bits, OpenZeppelin, or similar (for production)
-6. ✅ **Testnet deployment** on Arbitrum Sepolia for 2+ weeks
-7. ✅ **Bug bounty** program post-mainnet launch
+1. ✅ **Add NatSpec comments** to all public functions — Done
+2. ✅ **Rename parameters** from `_param` to `param` — Done (commit `e33ead0`)
+3. ✅ **Make TreasurerModule._deployer immutable** — Done (commit `e33ead0`)
+4. ✅ **Add IERC721Receiver inheritance** to MembershipTreasury — Done (commit `e33ead0`)
+5. ⬜ **External audit** by Trail of Bits, OpenZeppelin, or similar (for production)
+6. ⬜ **Testnet deployment** on Arbitrum Sepolia for 2+ weeks
+7. ⬜ **Bug bounty** program post-mainnet launch
 
 ### Test Coverage:
-Current: **121 tests passing**  
-Run `npm run coverage` to get detailed coverage metrics.  
-Target: >95% line coverage on core contracts.
+Current: **190 tests passing — 95% line coverage achieved**  
+See [GAS-AND-COVERAGE.md](GAS-AND-COVERAGE.md) for detailed per-contract breakdown.  
+Run `npm run coverage` for latest metrics.
 
 ### Gas Optimization:
 Run `npm run test:gas` to profile gas costs.  
@@ -217,7 +205,7 @@ Current contract sizes are within 24KB limit with optimizer.
 
 1. **Slither v0.11.5** - Static analysis
 2. **Solhint v6.0.3** - Linting
-3. **Hardhat Test Suite** - 121 functional tests
+3. **Hardhat Test Suite** - 190 functional tests (95% line coverage)
 4. **Manual Review** - Architecture and access control patterns
 
 ---

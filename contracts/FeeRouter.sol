@@ -1,23 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/*
-    FeeRouter — Dedicated membership-fee collection contract.
-
-    Separation of concerns:
-      • The DAO holds fee configuration (feeToken, baseFee, gracePeriod,
-        payoutTreasury) and member active/inactive state.
-      • This contract is the single authorized caller of dao.recordFeePayment().
-      • MembershipTreasury stays a clean general-purpose fund store with no
-        fee logic mixed in.
-
-    Flow:
-      1. Caller calls payMembershipFee(memberId).
-      2. FeeRouter reads feeToken / feeOfRank / payoutTreasury from the DAO.
-      3. Collects ETH (msg.value) or ERC-20 (safeTransferFrom).
-      4. Forwards funds to payoutTreasury.
-      5. Calls dao.recordFeePayment(memberId) to extend the member's epoch.
-*/
+/// @title FeeRouter — Dedicated membership-fee collection contract.
+/// @author Guild DAO
+/// @notice Reads fee configuration from the DAO, collects ETH or ERC-20,
+///         forwards funds to the payout treasury, and calls
+///         `dao.recordFeePayment()` to extend the member's paid-until epoch.
+/// @dev    The DAO holds fee configuration (feeToken, baseFee, gracePeriod,
+///         payoutTreasury) and member active/inactive state.  This contract is
+///         the single authorized caller of `dao.recordFeePayment()`.
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -60,10 +51,10 @@ contract FeeRouter is ReentrancyGuard {
     // ════════════════════════════ Pay Fee ════════════════════════════════════
 
     /// @notice Pay the membership fee for `memberId`.
-    ///         If the DAO's feeToken is address(0), send ETH (msg.value must
+    /// @dev    If the DAO's feeToken is address(0), send ETH (msg.value must
     ///         equal the fee).  Otherwise, approve this contract for the ERC-20
-    ///         amount before calling.
-    ///         Anyone can pay on behalf of any member.
+    ///         amount before calling.  Anyone can pay on behalf of any member.
+    /// @param memberId The DAO member ID to pay for.
     function payMembershipFee(uint32 memberId) external payable nonReentrant {
         // --- resolve member rank ---
         (bool exists,, IRankedMembershipDAO.Rank rank,,) = dao.membersById(memberId);
