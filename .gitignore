@@ -14,6 +14,11 @@ coverage.json
 typechain
 typechain-types
 
+# Foundry files
+forge-out
+forge-cache
+lib/
+
 # IDE
 .idea
 .vscode

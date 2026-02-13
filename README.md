@@ -417,13 +417,15 @@ npx hardhat run scripts/deploy.js --network arbitrum
 
 ## Testing & Security
 
-| Tool              | Command          | Purpose                |
-|-------------------|------------------|------------------------|
-| Hardhat Tests     | `npx hardhat test` | 190 tests, 95% coverage |
-| Solhint           | `npm run lint`   | Solidity linting       |
-| Slither           | `npm run slither`| Static analysis        |
-| Coverage          | `npm run coverage`| Line/branch coverage  |
-| Gas Reporter      | `npm run test:gas`| Gas cost profiling     |
+| Tool              | Command            | Purpose                        |
+|-------------------|--------------------|--------------------------------|
+| Hardhat Tests     | `npm test`         | 190 unit/integration tests     |
+| Foundry Fuzz      | `npm run test:fuzz`| 44 property-based fuzz tests   |
+| All Tests         | `npm run test:all` | Both suites                    |
+| Solhint           | `npm run lint`     | Solidity linting               |
+| Slither           | `npm run slither`  | Static analysis                |
+| Coverage          | `npm run coverage` | Line/branch coverage (95%)     |
+| Gas Reporter      | `npm run test:gas` | Gas cost profiling             |
 
 **Documentation:**
 - [GAS-AND-COVERAGE.md](GAS-AND-COVERAGE.md) — Gas costs per operation + coverage table

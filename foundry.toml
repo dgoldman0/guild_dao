@@ -1,0 +1,25 @@
+[profile.default]
+src = "contracts"
+out = "forge-out"
+libs = ["node_modules", "lib"]
+test = "test/foundry"
+cache_path = "forge-cache"
+
+remappings = [
+    "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+    "forge-std/=lib/forge-std/src/"
+]
+
+evm_version = "paris"
+solc_version = "0.8.24"
+via_ir = true
+optimizer = true
+optimizer_runs = 1
+
+[fuzz]
+runs = 1024
+seed = "0x1"
+
+[invariant]
+runs = 256
+depth = 32

@@ -143,6 +143,30 @@ Before deploying to mainnet or production, ensure:
 
 ## Advanced Testing (Optional)
 
+### Foundry Fuzz Testing ✅ (Implemented)
+Property-based fuzz testing using Foundry/forge. 44 fuzz tests across 5 suites,
+1024 random input runs each.
+
+```bash
+# Run all fuzz tests
+npm run test:fuzz
+
+# Run a specific suite
+forge test --match-contract FuzzTreasury -vv
+
+# Increase fuzz runs for deeper testing
+forge test --fuzz-runs 10000
+```
+
+**Test suites:**
+| Suite | Properties | Focus |
+|-------|-----------|-------|
+| FuzzRankMath | 9 | Voting power, invite/order/proposal limits, fee math |
+| FuzzVotingPower | 7 | Total power invariant, rank changes, activation flow |
+| FuzzTreasury | 9 | Spending limits, caps, period resets, access control |
+| FuzzGovernance | 10 | Quorum, voting, finalization timing, parameter bounds |
+| FuzzFees | 9 | Fee payment, epoch extension, deactivation timing |
+
 ### Echidna - Fuzzing
 Property-based fuzzing to find edge cases.
 
