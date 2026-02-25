@@ -1,5 +1,7 @@
 # Guild DAO System
 
+Part of the Barayin-Adamah ecosystem: https://github.com/dgoldman0/adamah
+
 > A hierarchical ranked-membership DAO with timelocked governance, treasury
 > management, and invite-based onboarding — targeting Arbitrum One.
 
